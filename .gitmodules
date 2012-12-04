@@ -1,0 +1,9 @@
+[submodule "py_lsc_amr"]
+	path = py_lsc_amr
+	url = /Users/leifdenby/Desktop/PhD/git-repos/py_lsc_amr.git
+[submodule "pysolver"]
+	path = pysolver
+	url = /Users/leifdenby/Desktop/PhD/git-repos/pysolver.git
+[submodule "lsc_tasker"]
+	path = lsc_tasker
+	url = /Users/leifdenby/Desktop/PhD/git-repos/lsc_tasker.git

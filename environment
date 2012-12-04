@@ -1,0 +1,2 @@
+export PATH=$PATH:$HOME/Desktop/PhD/pycfd/lsc_tasker/bin
+export PYTHONPATH=$PYTHONPATH:$HOME/Desktop/PhD/pycfd/
