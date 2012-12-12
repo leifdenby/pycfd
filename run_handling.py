@@ -280,10 +280,9 @@ class SettingsGenerationHelper:
         return task
 
     def _getBasedir(self):
-        warnings.warn("Need to pass in basedir better for pysolver")
-        pycfd_basedir = '/Users/leifdenby/Desktop/PhD/pycfd'
+        import common
+        pycfd_basedir = common.basedir
         return pycfd_basedir
-
 
     def enqueue(self, host = None):
         """

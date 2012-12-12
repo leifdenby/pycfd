@@ -1,6 +1,7 @@
 import numpy as np
-global pycfd_basedir 
-pycfd_basedir = "/Users/leifdenby/Desktop/PhD/pycfd"
+import os
+
+basedir = os.path.dirname(os.path.abspath(__file__))
 
 def print_grid(u):
     (i_max, j_max) = u.shape
