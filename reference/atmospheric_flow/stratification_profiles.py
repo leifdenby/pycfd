@@ -3,7 +3,7 @@ import scipy.constants
 import reference.atmospheric_flow.gas_properties
 
 def getStandardIsothermalAtmosphere():
-    gas_properties = atmosphericFlow.gasProperties.AtmosphericAir()
+    gas_properties = reference.atmospheric_flow.gas_properties.AtmosphericAir()
     rho0 = 1.205
     p0 = 101325.0
     dTdz = 0.0  # isothermal
@@ -71,5 +71,8 @@ class HydrostaticallyBalancedAtmosphere:
         z = pos[-1]
         return self.temp(z)*np.power(self.p(pos)/self.p0, self.gas_properties.kappa())
 
-    def vel(self, pos):
-        return np.zeros(pos.shape)
+    def x_vel(self, pos):
+        return 0.0
+    
+    def y_vel(self, pos):
+        return 0.0
