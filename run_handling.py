@@ -1,12 +1,20 @@
-import threading
+"""
+Contains general purpose classes and functions for defining and running tasks.
+
+In addition there are functions for storing and retrieving both tasks and run
+settings.
+"""
+
 import os
-import re
 import time
 import subprocess
 import yaml
 import fnmatch
 import glob
-from operator import attrgetter
+import getpass
+import warnings
+
+import lsc_tasker
 
 
 class TaskRunfile():
@@ -85,7 +93,7 @@ class TaskRun(object):
     def _writeSettingsfile(self):
         settingsfile_filename = os.path.join(self.output_directory, "settings")
         self.task.settingsfile_filename = settingsfile_filename
-        writeSettingsToFile(self.task.settings, settingsfile_filename)
+        self.task.settings.save(filename=settingsfile_filename)
 
     def _writeRunfiles(self):
         # write the run files (these get written to the "runfiles" folder), and set the correct filename in the settings
@@ -171,6 +179,18 @@ class BaseTask(object):
         raise Exception("Any TaskClass should override this method")
 
     def run(self, output_directory_base):
+        if self.settings.interactive_settings is not None:
+            # For now I will not spawn a new process of an interactive run, I should redo
+            # this later as the LSC-AMR cannot be run like this. Needs some better of IPC in python
+            import pysolver
+            if isinstance(self.settings, pysolver.Settings):
+                import warnings
+                warnings.warn("Running pysolver directly without spawning a new process, no log will be created")
+                import pysolver.run_handler
+                pysolver.run_handler.run(settings=self.settings)
+                return 
+            else:
+                pass
         with TaskRun(task=self, output_directory_base=output_directory_base, print_log=True) as task_process:
             print task_process.communicate()[1]
         
@@ -230,22 +250,51 @@ class ParameterStudyHelper:
     def sendTask(self, settings, runfiles = []):
         pass
 
+class SettingsGenerationHelper:
+    def __init__(self, generator_filename, settings):
+        self.settings = settings
+        self.generator = open(generator_filename, 'r').read()
+        self.generator_filename = generator_filename
+
+    def run(self):
+        """
+        generate task and set output directory relative to the path of the generator
+        """
+        pycfd_basedir = self._getBasedir()
+        basedir_output = os.path.dirname(os.path.abspath(self.generator_filename))
+        task = self._makeTask()
+        task.run(output_directory_base=basedir_output)
+
+    def _makeTask(self):
+        owner = getpass.getuser()
+        num_processes = 1
+        description = "description will come from doc string"
+        
+        pycfd_basedir = self._getBasedir()
+        executable = os.path.join(pycfd_basedir, "pysolver", "run_handler.py")
+        import sys
+        solver_module = sys.modules[self.settings.__module__]
+        task_class = getattr(solver_module,'Task')
+        task = task_class(owner=owner, num_processes=num_processes, executable=executable, 
+                settings=self.settings, description=description, generator=self.generator)
+        return task
+
+    def _getBasedir(self):
+        warnings.warn("Need to pass in basedir better for pysolver")
+        pycfd_basedir = '/Users/leifdenby/Desktop/PhD/pycfd'
+        return pycfd_basedir
+
+
+    def enqueue(self, host = None):
+        """
+        try and enqueue this task on the taskerServer requested.
+        """
+        task = self._makeTask()
+        lsc_tasker.utils.sendTask(task, host)
+
 
 class UnknownSettingsTypeError(Exception):
     pass
-
-import py_lsc_amr.run_settings
-import pysolver.run_settings
-
-def writeSettingsToFile(settings, filename):
-    if isinstance(settings, py_lsc_amr.run_settings.LSC_AMR_Settings):
-        py_lsc_amr.run_settings.dump(settings, filename)
-    elif isinstance(settings, pysolver.run_settings.PySolverSettings):
-        filehandle = open(filename,"w")
-        yaml.dump(settings, filehandle)
-        filehandle.close()
-    else:
-        raise UnknownSettingsTypeError()
 
 def loadSettingsFromFile(filename):
     """
@@ -267,8 +316,8 @@ def loadSettingsFromFile(filename):
     try:
         settings_object = yaml.load(raw_settings)
     except yaml.scanner.ScannerError:
-        settings_object = py_lsc_amr.run_settings.load(raw_settings)
-    return settings_object
+        import py_lsc_amr
+        return py_lsc_amr.Settings.load(filename)
 
 def writeTask(task, filename):
     taskfile = open(filename, "wb")
@@ -313,3 +362,8 @@ def loadTask(task_filename):
         else:
             return None
 
+class InteractiveSettings:
+    def __init__(self, pause, output_every_n_steps, plotting_routine):
+        self.pause = pause
+        self.output_every_n_steps = output_every_n_steps
+        self.plotting_routine = plotting_routine
