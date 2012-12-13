@@ -12,13 +12,13 @@ def load(Re):
         datadir = os.path.dirname(os.path.abspath(__file__))
         
         dtype = [('grid_point','i'), ('y','f')]
-        for Re in Re_s:
-            dtype.append(('Re_%i' % Re, 'f'))
+        for Re_ in Re_s:
+            dtype.append(('Re_%i' % Re_, 'f'))
         raw_data_u = np.loadtxt(os.path.join(datadir, 'u_vel.dat'), dtype=dtype)
         
         dtype = [('grid_point','i'), ('x','f')]
-        for Re in Re_s:
-            dtype.append(('Re_%i' % Re, 'f'))
+        for Re_ in Re_s:
+            dtype.append(('Re_%i' % Re_, 'f'))
         raw_data_v = np.loadtxt(os.path.join(datadir, 'v_vel.dat'), dtype=dtype)
 
         data = {
