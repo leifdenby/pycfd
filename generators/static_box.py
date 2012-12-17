@@ -5,7 +5,6 @@ Lid-driven cavity problem with fixed density.
 import pysolver.run_settings
 import run_handling
 
-import pysolver.models.soundproof.constant_density_ns
 import pysolver.models.soundproof.variable_density_ns
 import pysolver.grids.grid2d
 import pysolver.numMethods.soundproof.bcg
@@ -13,41 +12,27 @@ import pysolver.numMethods.soundproof.mac
 import pysolver.tests
 import pysolver.tests.lid_driven_cavity
 
+import reference.atmospheric_flow.stratification_profiles
 
-N = (50, 50)
-x = (0.0, 1.0)
-y = (0.0, 1.0)
-
-viscosity = 0.01
-u_top = 1.0
-
-projection_type = 4
-
-base_state = {'x_vel': 0.0, 'y_vel': 0.0, 'rho': 1.0}
-ambient_state = pysolver.tests.ConstantState(base_state)
-
-def density_fn(pos):
-    (x, y) = pos
-    if abs(x - 0.5) < 0.1 and abs(y - 0.5) < 0.1:
-        return 4.0
-    else:
-        return 1.0
-
-#base_state_fns = {'x_vel': lambda pos: 0.0, 'y_vel': lambda pos:0.0, 'rho': lambda pos: density_fn(pos)}
-#ambient_state = pysolver.tests.SpaceDependentState(base_state_fns)
+N = (100, 100)
+x = (0.0, 1000.0)
+y = (0.0, 1000.0)
 
 domain_spec = pysolver.grids.grid2d.DomainSpec(N=N, x=x, y=y)
 
-model = pysolver.models.soundproof.constant_density_ns.ConstantDensityIncompressibleNS2D(viscosity=viscosity)
-#model = pysolver.models.soundproof.variable_density_ns.VariableDensityIncompressibleNS2D(viscosity=viscosity, diffusion_coefficient=0.0, g=0.1)
-test = pysolver.tests.lid_driven_cavity.Test2D(domain_spec=domain_spec, u_top=u_top, ambient_state=ambient_state, viscosity=viscosity)
+base_state = {'x_vel': 0.0, 'y_vel': 0.0, 'rho': 1.0}
+ambient_state = pysolver.tests.ConstantState(base_state)
+viscosity = 0.0
 
-#import pysolver.grids.boundary_conditions as BCs
-#test.boundary_conditions[2] = (BCs.DensityAtWall(), BCs.DensityAtWall(), BCs.DensityAtWall(), BCs.DensityAtWall())
+model = pysolver.models.soundproof.variable_density_ns.VariableDensityIncompressibleNS2D(viscosity=viscosity, diffusion_coefficient=0.0, g=1.0)
+test = pysolver.tests.RigidBox2D(ambient_state=ambient_state)
 
-output_times = [60.0]
+import pysolver.grids.boundary_conditions as BCs
+test.boundary_conditions[2] = tuple([BCs.DensityAtWall() for i in range(4)])
 
-num_scheme = pysolver.numMethods.soundproof.bcg.BCG(model=model, boundary_conditions=test.boundary_conditions, domain_spec=domain_spec, projection_type=projection_type)
+output_times = [1000.0]
+
+num_scheme = pysolver.numMethods.soundproof.bcg.BCG(model=model, boundary_conditions=test.boundary_conditions, domain_spec=domain_spec)
 #num_scheme = pysolver.numMethods.soundproof.mac.MAC(model=model, boundary_conditions=test.boundary_conditions, domain_spec=domain_spec)
 
 def plotting_routine(Q, grid, model, test, t, n_steps, num_scheme, save_fig = False):
@@ -121,23 +106,7 @@ def plotting_routine(Q, grid, model, test, t, n_steps, num_scheme, save_fig = Fa
     plot.grid(True)
     plot.draw()
 
-    if save_fig:
-        output_folder = '/Users/leifdenby/Desktop/PhD/output/%s' % repr(model)
-        import os
-        try:
-            os.makedirs(output_folder)
-        except:
-            pass
-
-        frame_counter = 0
-        filename = '%s/frame_%d.png' % (output_folder, frame_counter)
-        while os.path.exists('%s/frame_%d.png' % (output_folder, frame_counter)):
-            frame_counter += 1
-            filename = '%s/frame_%d.png' % (output_folder, frame_counter)
-        plot.savefig(filename)
-        np.savetxt("%s-rho.dat" % filename, Q.view(model.state).rho[n:-n,n:-n])
-
-    #print "v_max= %e, u_max= %e" % (np.max(v), np.max(u))
+    print "v_max= %e, u_max= %e" % (np.max(v), np.max(u))
 
 interactive_settings = run_handling.InteractiveSettings(pause=False, output_every_n_steps=1, plotting_routine=plotting_routine)
 

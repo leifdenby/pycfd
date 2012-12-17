@@ -30,6 +30,30 @@ domain_spec = pysolver.grids.grid2d.DomainSpec(N=N, x=x, y=y)
 model = pysolver.models.soundproof.variable_density_ns.VariableDensityIncompressibleNS2D(viscosity=viscosity, diffusion_coefficient=0.0)
 test = pysolver.tests.RigidBox2D(ambient_state=ambient_state)
 
+import pysolver.grids.boundary_conditions as BCs
+
+test.boundary_conditions[0] = (
+        BCs.SolidWall(),
+        BCs.SolidWall(),
+        BCs.ZeroGradient(),
+        BCs.ZeroGradient(),
+        )
+
+test.boundary_conditions[1] = (
+        BCs.ZeroGradient(),
+        BCs.ZeroGradient(),
+        BCs.SolidWall(),
+        BCs.SolidWall(),
+        )
+
+test.boundary_conditions[2] = (
+        BCs.DensityAtWall(),
+        BCs.DensityAtWall(),
+        BCs.FixedGradient(gradient=ambient_state.drho_dz(pos=(x[0],y[0]))),
+        BCs.FixedGradient(gradient=ambient_state.drho_dz(pos=(x[1],y[1]))),
+        )
+
+
 output_times = [60.0]
 
 num_scheme = pysolver.numMethods.soundproof.bcg.BCG(model=model, boundary_conditions=test.boundary_conditions, domain_spec=domain_spec)
@@ -78,12 +102,12 @@ def plotting_routine(Q, grid, model, test, t, n_steps, num_scheme, save_fig = Fa
     s.set_xlabel('position (m)')
     s.set_ylabel('velocity (m/s)')
     plots = []
-    #p1 = plot.plot(y[Nx/2,:], u[Nx/2,:], label="y-velocity along vertical center", marker="x")
-    #plots.extend(p1)
+    p1 = plot.plot(y[Nx/2,:], u[Nx/2,:], label="y-velocity along vertical center", marker="x")
+    plots.extend(p1)
     #p3 = plot.plot(y[Nx*0.1,:], v[Nx*0.1,:], label="y-velocity along left edge", marker="x")
     #plots.extend(p3)
-    p1 = plot.plot(x[:,Nx/2], v[:,Nx/2], label="y-velocity along horizontal center", marker="x")
-    plots.extend(p1)
+    #p1 = plot.plot(x[:,Nx/2], v[:,Nx/2], label="y-velocity along horizontal center", marker="x")
+    #plots.extend(p1)
     if hasattr(model.state,'temp'):
         ax2 = s.twinx()
         ax2.set_ylabel('Temperature (K)')
@@ -122,7 +146,7 @@ def plotting_routine(Q, grid, model, test, t, n_steps, num_scheme, save_fig = Fa
         plot.savefig(filename)
         np.savetxt("%s-rho.dat" % filename, Q.view(model.state).rho[n:-n,n:-n])
 
-    #print "v_max= %e, u_max= %e" % (np.max(v), np.max(u))
+    print "v_max= %e, u_max= %e" % (np.max(v), np.max(u))
 
 interactive_settings = run_handling.InteractiveSettings(pause=True, output_every_n_steps=1, plotting_routine=plotting_routine)
 
