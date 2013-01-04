@@ -15,6 +15,7 @@ import getpass
 import warnings
 
 import lsc_tasker
+import lsc_tasker.utils
 
 class TaskRunfile():
     def __init__(self, name, content, settings_param, description):
