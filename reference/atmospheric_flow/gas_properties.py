@@ -48,7 +48,8 @@ class IdealGas(object):
         return self.cp()/self.cv()
 
     def kappa(self):
-        return scipy.constants.R/self.cp()
+        return (self.gamma() - 1.0)/self.gamma()
+        #return scipy.constants.R*1000.0/self.cp()
 
     def R(self):
         """
@@ -62,7 +63,7 @@ class IdealGas(object):
 class DiatomicGas(IdealGas):
     def __init__(self, M):
         super(DiatomicGas, self).__init__(f=5.0, M=M)
-    
+
     def __str__(self):
         return "Diatomic %s" % super(DiatomicGas, self).__str__()
 
