@@ -16,7 +16,6 @@ import warnings
 
 import lsc_tasker
 
-
 class TaskRunfile():
     def __init__(self, name, content, settings_param, description):
         (self.name, self.content, self.settings_param, self.description) = (name, content, settings_param, description)
@@ -41,11 +40,6 @@ class TaskRun(object):
     def __init__(self, task, output_directory_base, print_log = False):
         self.task = task
         self.output_directory = self._getFreeOutputDirectory(output_directory_base)
-        
-        import warnings
-        warnings.warn("Need to rethink the way the output_directory is saved in the settings")
-        #self.settings.Output.directory = output_directory
-        
         self.print_log = print_log
 
         self._writeRunfiles()
@@ -63,7 +57,7 @@ class TaskRun(object):
 
     def __exit__(self, typ, val, traceback):
         self.logfile.close()
-        # clean up the log file (remove backspace characters) 
+        # clean up the log file (remove backspace characters)
         logfile = open(self.log_filename)
         logfile_content_old = logfile.readlines()
         logfile.close()
@@ -73,18 +67,21 @@ class TaskRun(object):
             line = line.replace("\010","")
             logfile.write(line)
         logfile.close()
-        
+        # for now we will output a bit of the log file, I haven't got tee working yet
+        print
+        print "Since tee doesn't work right now, here's the end of the log file:"
+        print "".join(open(self.log_filename).readlines()[-20:])
+
     def _setupLogfile(self):
         # setup task logfile
         log_filename = os.path.join(self.output_directory, "run.log")
         self.log_filename = log_filename
-        print "b", self.print_log
         self.logfile = open(log_filename, "w")
         if self.print_log:
             self.logging_target = LogEmitter(self.logfile)
         else:
             self.logging_target = self.logfile
-        
+
     def _writeTaskfile(self):
         # write the task definition to a file so that we may run it again if needed
         taskfile_filename = os.path.join(self.output_directory, "taskfile.tsk")
@@ -93,6 +90,8 @@ class TaskRun(object):
     def _writeSettingsfile(self):
         settingsfile_filename = os.path.join(self.output_directory, "settings")
         self.task.settingsfile_filename = settingsfile_filename
+        if hasattr(self.task.settings, 'setOutputDirectory'):
+            self.task.settings.setOutputDirectory(self.output_directory)
         self.task.settings.save(filename=settingsfile_filename)
 
     def _writeRunfiles(self):
@@ -113,7 +112,7 @@ class TaskRun(object):
                 import warnings
                 # TODO: If I start using runfiles again I should try and find out why the line below was needed
                 warnings.warn("Storing of runfiles in settings is currently not working correctly")
-    
+
     def _getFreeOutputDirectory(self, output_directory_base):
         # create output directory
         n = 0
@@ -128,7 +127,10 @@ class TaskRun(object):
         return output_dir
 
 class BaseTask(object):
-    def __init__(self,owner,num_processes,executable,settings,description,runfiles = [], generator = None):
+    def __init__(self,num_processes,executable,settings,description,runfiles = [], generator = None, owner = None):
+        if owner is None:
+            owner = getpass.getuser()
+
         (self.owner, self.num_processes, self.executable, self.settings, self.description, self.runfiles) = (owner, num_processes, executable, settings, description, runfiles)
         self.alreadyRun = False
         self.generator = generator
@@ -141,7 +143,7 @@ class BaseTask(object):
         string += "runfiles:\n" + "".join(["\t%s.dat: %s\n" % (runfile.name, runfile.description) for runfile in self.runfiles])
         string += "\nOwner: %s\nNum processes: %s\nexecutable: %s\ndescription: %s\n" % (self.owner, self.num_processes, self.executable, self.description)
         return string
-    
+
     def taskIsComplete(self):
         return self.getRunDuration() is not None
 
@@ -179,7 +181,7 @@ class BaseTask(object):
         raise Exception("Any TaskClass should override this method")
 
     def run(self, output_directory_base):
-        if self.settings.interactive_settings is not None:
+        if hasattr(self.settings, 'interactive_settings') and self.settings.interactive_settings is not None:
             # For now I will not spawn a new process of an interactive run, I should redo
             # this later as the LSC-AMR cannot be run like this. Needs some better of IPC in python
             import pysolver
@@ -188,12 +190,12 @@ class BaseTask(object):
                 warnings.warn("Running pysolver directly without spawning a new process, no log will be created")
                 import pysolver.run_handler
                 pysolver.run_handler.run(settings=self.settings)
-                return 
+                return
             else:
                 pass
         with TaskRun(task=self, output_directory_base=output_directory_base, print_log=True) as task_process:
             print task_process.communicate()[1]
-        
+
     #def runAndReturnProcess(self, output_directory_base, logging_target = subprocess.PIPE):
         #"""
         #Call this method without defining the logging_target to run the task
@@ -205,7 +207,7 @@ class BaseTask(object):
         #args = self._getRunArgs()
         #print " ".join(args)
         #return subprocess.Popen(args,stdout=logging_target,stderr=logging_target,stdin=subprocess.PIPE)
-    
+
     #def run(self, output_directory_base, logging_target = None):
         #"""
         #Call this method without defining the logging_target to run the task
@@ -220,12 +222,12 @@ class BaseTask(object):
         #print proc.communicate()[1]
 
         ## TODO: Better interaction with the spawned subprocesses is needed here, but I'll do that
-        ##       another day. What I need ideally is to be able to emit certain things to the 
+        ##       another day. What I need ideally is to be able to emit certain things to the
         ##       process and to asynchronously pool the process for output.
         ##       http://stefaanlippens.net/python-asynchronous-subprocess-pipe-reading looks like a good
         ##       starting point, basically the idea is place communication in queues.
         ##       I want to be able to both place output in a log and to write it to screen
-        
+
         ##try:
             ##print " ".join(args)
             ##print self.settings
@@ -250,11 +252,12 @@ class ParameterStudyHelper:
     def sendTask(self, settings, runfiles = []):
         pass
 
-class SettingsGenerationHelper:
-    def __init__(self, generator_filename, settings):
-        self.settings = settings
-        self.generator = open(generator_filename, 'r').read()
-        self.generator_filename = generator_filename
+class SettingsGenerationHelper(object):
+    def __init__(self, generator_vars):
+        self.settings = generator_vars['settings']
+        self.generator_filename = generator_vars['__file__']
+        self.task_description = generator_vars['__doc__']
+        self.generator = open(self.generator_filename, 'r').read()
 
     def run(self):
         """
@@ -267,17 +270,19 @@ class SettingsGenerationHelper:
 
     def _makeTask(self):
         owner = getpass.getuser()
-        num_processes = 1
-        description = "description will come from doc string"
-        
+        description = self.task_description
+        (executable, num_processes) = self._getExecutable()
+
         pycfd_basedir = self._getBasedir()
-        executable = os.path.join(pycfd_basedir, "pysolver", "run_handler.py")
         import sys
         solver_module = sys.modules[self.settings.__module__]
         task_class = getattr(solver_module,'Task')
-        task = task_class(owner=owner, num_processes=num_processes, executable=executable, 
+        task = task_class(owner=owner, num_processes=num_processes, executable=executable,
                 settings=self.settings, description=description, generator=self.generator)
         return task
+
+    def _getExecutable(self):
+        raise Exception("This method should be overriden.")
 
     def _getBasedir(self):
         import common
@@ -332,7 +337,7 @@ def loadTask(task_filename):
                     matches.append(os.path.join(root, filename))
         else:
             matches = glob.glob(os.path.join(path,"*/taskfile.tsk"))
-        
+
         taskfiles_list = [(os.stat(i).st_mtime, i) for i in matches]
         taskfiles_list.sort()
         tasks = [loadTask(taskfile[1]) for taskfile in taskfiles_list]
@@ -348,7 +353,7 @@ def loadTask(task_filename):
             taskfile = open(task_filename,"r")
         except IOError:
             print "Error: Couldn't find the task specified, either pass in the full filename with path or write the task date and time.\ne.g. loadTask('20110516_091754')"
-        
+
         if taskfile:
             try:
                 task = yaml.load(taskfile.read())
