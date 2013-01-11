@@ -86,7 +86,7 @@ class TaskRun(object):
     def _writeTaskfile(self):
         # write the task definition to a file so that we may run it again if needed
         taskfile_filename = os.path.join(self.output_directory, "taskfile.tsk")
-        writeTask(self, taskfile_filename)
+        writeTask(self.task, taskfile_filename)
 
     def _writeSettingsfile(self):
         settingsfile_filename = os.path.join(self.output_directory, "settings")
@@ -330,22 +330,6 @@ def writeTask(task, filename):
     taskfile.close()
 
 def loadTask(task_filename):
-    def findTaskFilesAndLoad(path, recursive=False):
-        matches = []
-        if recursive:
-            for root, dirnames, filenames in os.walk(path):
-                for filename in fnmatch.filter(filenames, 'taskfile.tsk'):
-                    matches.append(os.path.join(root, filename))
-        else:
-            matches = glob.glob(os.path.join(path,"*/taskfile.tsk"))
-
-        taskfiles_list = [(os.stat(i).st_mtime, i) for i in matches]
-        taskfiles_list.sort()
-        tasks = [loadTask(taskfile[1]) for taskfile in taskfiles_list]
-        tasks = [task for task in tasks if task is not None]
-        print "%d tasks loaded." % len(tasks)
-        return tasks
-
     taskfile = None
     if task_filename == '*':
         return findTaskFilesAndLoad(os.getcwd(), recursive=True)

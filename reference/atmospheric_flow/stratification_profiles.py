@@ -18,6 +18,16 @@ def getStandardIsentropicAtmosphere():
     dTdz = -g/gas_properties.cp()
     return HydrostaticallyBalancedAtmosphere(rho0=rho0, p0=p0, dTdz=dTdz, gas_properties=gas_properties, g=g)
 
+def getKleinIsentropicAtmosphere():
+    gas_properties = reference.atmospheric_flow.gas_properties.AtmosphericAir()
+    rho0 = 1.0
+    g = 10.0
+    T0 = 300.0
+    p0 = rho0*gas_properties.R()*T0
+    dTdz = -g/gas_properties.cp()
+    return HydrostaticallyBalancedAtmosphere(rho0=rho0, p0=p0, dTdz=dTdz, gas_properties=gas_properties, g=g)
+
+
 class HydrostaticallyBalancedAtmosphere:
     """
     Class for setting a hydrostatically balanced atmosphere with
