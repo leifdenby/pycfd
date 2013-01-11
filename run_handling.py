@@ -174,7 +174,6 @@ class BaseTask(object):
             return None
 
 
-
     def initTaskRun(self, output_directory_base):
         pass
 
@@ -190,11 +189,12 @@ class BaseTask(object):
                 import warnings
                 warnings.warn("Running pysolver directly without spawning a new process, no log will be created")
                 import pysolver.run_handler
+                self.settings.setOutputDirectory(output_directory_base)
                 pysolver.run_handler.run(settings=self.settings)
                 return
             else:
                 pass
-        with TaskRun(task=self, output_directory_base=output_directory_base, print_log=True) as task_process:
+        with TaskRun(task=self, output_directory_base=output_directory_base, print_log=False) as task_process:
             print task_process.communicate()[1]
 
     #def runAndReturnProcess(self, output_directory_base, logging_target = subprocess.PIPE):
@@ -320,6 +320,7 @@ def loadSettingsFromFile(filename):
 
     try:
         settings_object = yaml.load(raw_settings)
+        return settings_object
     except yaml.scanner.ScannerError:
         import py_lsc_amr
         return py_lsc_amr.Settings.load(filename)
