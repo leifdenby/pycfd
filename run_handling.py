@@ -351,8 +351,3 @@ def loadTask(task_filename):
         else:
             return None
 
-class InteractiveSettings:
-    def __init__(self, pause, output_every_n_steps, plotting_routine):
-        self.pause = pause
-        self.output_every_n_steps = output_every_n_steps
-        self.plotting_routine = plotting_routine
