@@ -290,12 +290,12 @@ class SettingsGenerationHelper(object):
         pycfd_basedir = common.basedir
         return pycfd_basedir
 
-    def enqueue(self, host = None):
+    def enqueue(self, host = None, port = None):
         """
         try and enqueue this task on the taskerServer requested.
         """
         task = self._makeTask()
-        lsc_tasker.utils.sendTask(task, host)
+        lsc_tasker.utils.sendTask(task, host, port)
 
 
 class UnknownSettingsTypeError(Exception):
