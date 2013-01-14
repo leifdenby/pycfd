@@ -13,6 +13,7 @@ import fnmatch
 import glob
 import getpass
 import warnings
+import inspect
 
 import lsc_tasker
 import lsc_tasker.utils
@@ -196,6 +197,29 @@ class BaseTask(object):
                 pass
         with TaskRun(task=self, output_directory_base=output_directory_base, print_log=False) as task_process:
             print task_process.communicate()[1]
+
+    def get_parm_from_string(self, parm_str):
+        def get_leaf_parm(item, parm_tree):
+            if len(parm_tree) == 1:
+                node = getattr(item,parm_tree[0])
+                if inspect.ismethod(node):
+                    return node()
+                elif type(node) == list:
+                    return "\n" + "".join(["\t%s\n" % n for n in node])
+                else:
+                    return node
+            else:
+                return get_leaf_parm(getattr(item,parm_tree[0]), parm_tree[1:])
+        return get_leaf_parm(self,parm_str.split("."))
+
+    def set_parm_from_string(self, parm_str, value):
+        def set_leaf_parm(item, parm_tree, value):
+            if len(parm_tree) == 1:
+                setattr(item,parm_tree[0],value)
+            else:
+                set_leaf_parm(getattr(item,parm_tree[0]), parm_tree[1:],value)
+        set_leaf_parm(self,parm_str.split("."),value)
+    
 
     #def runAndReturnProcess(self, output_directory_base, logging_target = subprocess.PIPE):
         #"""
