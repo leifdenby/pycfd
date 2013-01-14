@@ -31,6 +31,7 @@ class LogEmitter(object):
     def write(self, text):
         print text
         self.logfile.write(text)
+        self.logfile.flush()
     def fileno(self):
         return self.logfile.fileno()
 
@@ -51,13 +52,21 @@ class TaskRun(object):
 
     def __enter__(self):
         self.task_process = self.spawnProcess(logging_target=self.logging_target)
-        return self.task_process
+        return self
 
     def spawnProcess(self, logging_target):
         args = self.task.getRunArgs()
         return subprocess.Popen(args,stdout=logging_target,stderr=logging_target,stdin=subprocess.PIPE)
 
+    def kill(self):
+        self.__exit__(None, None, None)
+
     def __exit__(self, typ, val, traceback):
+        if self.task_process is not None:
+            try:
+                self.task_process.kill()
+            except OSError:
+                pass
         self.logfile.close()
         # clean up the log file (remove backspace characters)
         logfile = open(self.log_filename)
@@ -70,19 +79,16 @@ class TaskRun(object):
             logfile.write(line)
         logfile.close()
         # for now we will output a bit of the log file, I haven't got tee working yet
-        print
-        print "Since tee doesn't work right now, here's the end of the log file:"
-        print "".join(open(self.log_filename).readlines()[-20:])
+        #print
+        #print "Since tee doesn't work right now, here's the end of the log file:"
+        #print "".join(open(self.log_filename).readlines()[-20:])
 
     def _setupLogfile(self):
         # setup task logfile
         log_filename = os.path.join(self.output_directory, "run.log")
         self.log_filename = log_filename
         self.logfile = open(log_filename, "w")
-        if self.print_log:
-            self.logging_target = LogEmitter(self.logfile)
-        else:
-            self.logging_target = self.logfile
+        self.logging_target = LogEmitter(self.logfile)
 
     def _writeTaskfile(self):
         # write the task definition to a file so that we may run it again if needed
@@ -127,6 +133,9 @@ class TaskRun(object):
                 output_dir = os.path.join(output_directory_base, "task_%s_%i/" % (time.strftime("%Y%m%d_%H%M%S"), n))
                 n += 1
         return output_dir
+
+    def communicate(self):
+        return self.task_process.communicate()[1]
 
 class BaseTask(object):
     def __init__(self,num_processes,executable,settings,description,runfiles = [], generator = None, owner = None):
@@ -195,8 +204,8 @@ class BaseTask(object):
                 return
             else:
                 pass
-        with TaskRun(task=self, output_directory_base=output_directory_base, print_log=False) as task_process:
-            print task_process.communicate()[1]
+        with TaskRun(task=self, output_directory_base=output_directory_base, print_log=False) as task_run:
+            print task_run.communicate()
 
     def get_parm_from_string(self, parm_str):
         def get_leaf_parm(item, parm_tree):
