@@ -183,9 +183,8 @@ class BaseTask(object):
             print "Task hasn't been started yet"
             return None
 
-
-    def initTaskRun(self, output_directory_base):
-        pass
+    #def initTaskRun(self, output_directory_base):
+        #pass
 
     def getRunArgs(self):
         raise Exception("Any TaskClass should override this method")
@@ -196,7 +195,6 @@ class BaseTask(object):
             # this later as the LSC-AMR cannot be run like this. Needs some better of IPC in python
             import pysolver
             if isinstance(self.settings, pysolver.Settings):
-                import warnings
                 warnings.warn("Running pysolver directly without spawning a new process, no log will be created")
                 import pysolver.run_handler
                 self.settings.setOutputDirectory(output_directory_base)
@@ -228,7 +226,7 @@ class BaseTask(object):
             else:
                 set_leaf_parm(getattr(item,parm_tree[0]), parm_tree[1:],value)
         set_leaf_parm(self,parm_str.split("."),value)
-    
+
 
     #def runAndReturnProcess(self, output_directory_base, logging_target = subprocess.PIPE):
         #"""
@@ -305,14 +303,12 @@ class SettingsGenerationHelper(object):
     def _makeTask(self):
         owner = getpass.getuser()
         description = self.task_description
-        (executable, num_processes) = self._getExecutable()
 
-        pycfd_basedir = self._getBasedir()
         import sys
         solver_module = sys.modules[self.settings.__module__]
         task_class = getattr(solver_module,'Task')
-        task = task_class(owner=owner, num_processes=num_processes, executable=executable,
-                settings=self.settings, description=description, generator=self.generator)
+        task = task_class(owner=owner, num_processes=self.num_processes, executable=self.executable,
+                          settings=self.settings, description=description, generator=self.generator)
         return task
 
     def _getExecutable(self):
@@ -323,12 +319,12 @@ class SettingsGenerationHelper(object):
         pycfd_basedir = common.basedir
         return pycfd_basedir
 
-    def enqueue(self, host = None, port = None):
+    def enqueue(self, host = None):
         """
         try and enqueue this task on the taskerServer requested.
         """
         task = self._makeTask()
-        lsc_tasker.utils.sendTask(task, host, port)
+        lsc_tasker.utils.sendTask(task, host)
 
 
 class UnknownSettingsTypeError(Exception):
