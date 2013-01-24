@@ -14,6 +14,7 @@ import glob
 import getpass
 import warnings
 import inspect
+import multiprocessing
 
 import lsc_tasker
 import lsc_tasker.utils
@@ -359,10 +360,11 @@ def writeTask(task, filename):
     yaml.dump(task, taskfile)
     taskfile.close()
 
+
 def loadTask(task_filename):
     taskfile = None
-    if task_filename == '*':
-        return findTaskFilesAndLoad(os.getcwd(), recursive=True)
+    if '*' in task_filename:
+        return findTaskFilesAndLoad(task_filename)
     else:
         try:
             taskfile = open(task_filename,"r")
@@ -374,10 +376,31 @@ def loadTask(task_filename):
                 task = yaml.load(taskfile.read())
                 # Override the output-dir so that files associated with tasks may be accessed properly if the task has been moved
                 task.taskfile = taskfile.name
+                task.parent_directory = os.path.dirname(os.path.abspath(task_filename))
                 return task
             except EOFError:
                 print "There was a problem with loading %s, unexpected end of file." % task_filename
                 return None
+            except yaml.constructor.ConstructorError:
+                print "The stored task object could not be recreated (%s)" % task_filename
         else:
             return None
 
+def findTaskFilesAndLoad(path, recursive=False):
+    matches = []
+    if recursive:
+        for root, dirnames, filenames in os.walk(path):
+            for filename in fnmatch.filter(filenames, 'taskfile.tsk'):
+                matches.append(os.path.join(root, filename))
+    else:
+        matches = glob.glob(os.path.join(path,"taskfile.tsk"))
+
+    taskfiles_list = [(os.stat(i).st_mtime, i) for i in matches]
+    taskfiles_list.sort()
+    taskfiles_list = [taskfile[1] for taskfile in taskfiles_list]
+    print "Loading %d tasks..." % len(taskfiles_list)
+    workpool = multiprocessing.Pool(processes=multiprocessing.cpu_count())
+    tasks = workpool.map(loadTask, taskfiles_list)
+    tasks = [task for task in tasks if task is not None]
+    print "%d tasks loaded." % len(tasks)
+    return tasks
