@@ -19,6 +19,13 @@ def getStandardIsentropicAtmosphere():
     dTdz = -g/gas_properties.cp()
     return HydrostaticallyBalancedAtmosphere(rho0=rho0, p0=p0, dTdz=dTdz, gas_properties=gas_properties, g=g)
 
+def getConstantDensityAtmosphere():
+    gas_properties = reference.atmospheric_flow.gas_properties.AtmosphericAir()
+    rho0 = 1.205
+    p0 = 101325.0
+    g = scipy.constants.g
+    dTdz = -g/gas_properties.R()
+    return HydrostaticallyBalancedAtmosphere(rho0=rho0, p0=p0, dTdz=dTdz, gas_properties=gas_properties, g=g)
 
 def getKleinIsentropicAtmosphere():
     gas_properties = reference.atmospheric_flow.gas_properties.AtmosphericAir()
