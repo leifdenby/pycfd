@@ -199,7 +199,9 @@ class BaseTask(object):
                 warnings.warn("Running pysolver directly without spawning a new process, no log will be created")
                 import pysolver.run_handler
                 self.settings.setOutputDirectory(output_directory_base)
-                pysolver.run_handler.run(settings=self.settings)
+                import ipdb
+                with ipdb.launch_ipdb_on_exception():
+                    pysolver.run_handler.run(settings=self.settings)
                 return
             else:
                 pass
