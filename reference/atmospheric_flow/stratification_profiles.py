@@ -89,10 +89,10 @@ class HydrostaticallyBalancedAtmosphere:
         """
         return self.temp(pos)*np.power(self.p(pos)/self.p0, -self.gas_properties.kappa())
 
-    def x_vel(self, pos):
+    def x_velocity(self, pos):
         return 0.0
 
-    def y_vel(self, pos):
+    def y_velocity(self, pos):
         return 0.0
 
     def lapseRate(self):
