@@ -52,7 +52,7 @@ class HydrostaticallyBalancedAtmosphere:
         self.dTdz = dTdz
         self.gas_properties = gas_properties
         self.T0 = p0*gas_properties.M/(rho0*scipy.constants.R*1000.0)
-        self.theta0 = self.T0  # p=p0 at surface
+        self.pot_temperature0 = self.T0  # p=p0 at surface
         if g is None:
             self.g = scipy.constants.g
         else:
@@ -83,7 +83,7 @@ class HydrostaticallyBalancedAtmosphere:
     def p(self, pos):
         return self.rho(pos)*scipy.constants.R*1000.0/self.gas_properties.M*self.temp(pos)
 
-    def theta(self, pos):
+    def pot_temperature(self, pos):
         """
         Calculate the potential temperature at pos.
         """

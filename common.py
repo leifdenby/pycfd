@@ -40,3 +40,5 @@ def meshgrid(x, y):
 aslice = lambda axis, s, e: (slice(None),) * axis + (slice(s, e),)
 
 aindex = lambda axis, s: (slice(None),) * axis + (s,)
+
+cvmgt = lambda bools, if_true, if_false: (if_true.T*bools.T + (bools == False).T*if_false.T).T

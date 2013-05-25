@@ -8,8 +8,8 @@ import numpy as np
 
 x0 = 0.0
 y0 = 0.0
-u_c = 0.0
-v_c = 0.0
+u_c = 1.0
+v_c = 1.0
 rho_c = 1.0
 w_ref = 1.0
 

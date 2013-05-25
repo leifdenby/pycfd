@@ -14,3 +14,10 @@ u = np.cos(2*pi*x)*np.sin(2*pi*y)
 v = np.sin(-2*pi*x)*np.cos(2*pi*y)
 
 ph.quiver(x, y, u, v)
+
+raw_input()
+
+l = np.sqrt(u*u + v*v)
+plot = ph.getPlotter()
+plot.imshow(l, interpolation='non')
+raw_input()

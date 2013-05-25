@@ -21,5 +21,5 @@ def dvdy(pos, t):
 def rho(pos, t):
     x, y = pos
     r = np.sqrt(x*x+y*y)
-    return 1.0 + (r < 0.5)*np.cos(2*pi*(r-0.25))**2.0
-
+    theta = np.arctan2(x, y)
+    return 1.0 + (1.0+np.sin(theta))*(r < 0.5)*np.cos(2*pi*(r-0.25))**2.0
