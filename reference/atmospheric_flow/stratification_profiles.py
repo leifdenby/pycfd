@@ -36,6 +36,18 @@ def getKleinIsentropicAtmosphere():
     dTdz = -g/gas_properties.cp()
     return HydrostaticallyBalancedAtmosphere(rho0=rho0, p0=p0, dTdz=dTdz, gas_properties=gas_properties, g=g)
 
+def getStrakaIsentropicAtmosphere():
+    """
+    Atmospheric profile used in cold bubble test of Straka et al. 1993
+    """
+    gas_properties = reference.atmospheric_flow.gas_properties.AtmosphericAir()
+    g = 9.81
+    T0 = 300.0
+    p0 = 1.0e6
+    rho0 = p0/T0*1.0/gas_properties.R()
+    dTdz = -g/gas_properties.cp()
+    return HydrostaticallyBalancedAtmosphere(rho0=rho0, p0=p0, dTdz=dTdz, gas_properties=gas_properties, g=g)
+
 
 class HydrostaticallyBalancedAtmosphere:
     """

@@ -388,6 +388,10 @@ def loadTask(task_filename):
         else:
             return None
 
+
+def get_workpool():
+    return multiprocessing.Pool(processes=multiprocessing.cpu_count())
+
 def findTaskFilesAndLoad(path, recursive=False):
     matches = []
     if recursive:
@@ -401,7 +405,7 @@ def findTaskFilesAndLoad(path, recursive=False):
     taskfiles_list.sort()
     taskfiles_list = [taskfile[1] for taskfile in taskfiles_list]
     print "Loading %d tasks..." % len(taskfiles_list)
-    workpool = multiprocessing.Pool(processes=multiprocessing.cpu_count())
+    workpool = get_workpool()
     tasks = workpool.map(loadTask, taskfiles_list)
     tasks = [task for task in tasks if task is not None]
     print "%d tasks loaded." % len(tasks)
