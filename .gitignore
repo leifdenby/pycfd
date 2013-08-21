@@ -3,3 +3,5 @@
 lsc_tasker_output
 generators/task_*
 .ropeproject
+data_store
+.DS_Store
