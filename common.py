@@ -41,4 +41,22 @@ aslice = lambda axis, s, e: (slice(None),) * axis + (slice(s, e),)
 
 aindex = lambda axis, s: (slice(None),) * axis + (s,)
 
-cvmgt = lambda bools, if_true, if_false: (if_true.T*bools.T + (bools == False).T*if_false.T).T
+cvmgt = lambda bools, if_true, if_false: (if_true.T*bools.T + np.logical_not(bools).T*if_false.T).T
+
+def cond_eval(cond, f_true, f_false):
+    results = np.empty(cond.shape)
+    condinv = np.invert(cond)
+    def f_(*args):
+        results[cond] = f_true(*[arg[cond] for arg in args])
+        results[condinv] = f_false(*[arg[condinv] for arg in args])
+        return results
+
+    return f_
+
+def cond_map(q, cond, f):
+    def f_(**args):
+        #q[cond] = f(*[arg[cond] for arg in args])
+        q[cond] = f(**{k:v[cond] for k,v in args.items()})
+        return q
+
+    return f_

@@ -69,8 +69,7 @@ class DiatomicGas(IdealGas):
 
 class AtmosphericAir(DiatomicGas):
     def __init__(self):
-        super(AtmosphericAir, self).__init__(M=28.97)
+        super(AtmosphericAir, self).__init__(M=28.9645)
 
     def __str__(self):
         return "Atmospheric air (%s)" % super(AtmosphericAir, self).__str__()
-

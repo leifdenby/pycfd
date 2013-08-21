@@ -15,6 +15,9 @@ import getpass
 import warnings
 import inspect
 import multiprocessing
+import sys
+
+import __builtin__
 
 import lsc_tasker
 import lsc_tasker.utils
@@ -43,12 +46,12 @@ class TaskRun(object):
     """
     def __init__(self, task, output_directory_base, print_log = False):
         self.task = task
-        self.output_directory = self._getFreeOutputDirectory(output_directory_base)
+        self.output_directory = BaseTask.getFreeOutputDirectory(output_directory_base=output_directory_base)
+        os.makedirs(self.output_directory)
         self.print_log = print_log
+        task.save(self.output_directory)
 
-        self._writeRunfiles()
-        self._writeSettingsfile()
-        self._writeTaskfile()
+        #self._writeRunfiles()
         self._setupLogfile()
 
     def __enter__(self):
@@ -56,7 +59,10 @@ class TaskRun(object):
         return self
 
     def spawnProcess(self, logging_target):
-        args = self.task.getRunArgs()
+        saved_generator_filename = self.task.getGeneratorSaveFilename(self.output_directory)
+
+        args = ['/usr/bin/python', saved_generator_filename]
+        print " ".join(args)
         return subprocess.Popen(args,stdout=logging_target,stderr=logging_target,stdin=subprocess.PIPE)
 
     def kill(self):
@@ -91,18 +97,6 @@ class TaskRun(object):
         self.logfile = open(log_filename, "w")
         self.logging_target = LogEmitter(self.logfile)
 
-    def _writeTaskfile(self):
-        # write the task definition to a file so that we may run it again if needed
-        taskfile_filename = os.path.join(self.output_directory, "taskfile.tsk")
-        writeTask(self.task, taskfile_filename)
-
-    def _writeSettingsfile(self):
-        settingsfile_filename = os.path.join(self.output_directory, "settings")
-        self.task.settingsfile_filename = settingsfile_filename
-        if hasattr(self.task.settings, 'setOutputDirectory'):
-            self.task.settings.setOutputDirectory(self.output_directory)
-        self.task.settings.save(filename=settingsfile_filename)
-
     def _writeRunfiles(self):
         # write the run files (these get written to the "runfiles" folder), and set the correct filename in the settings
         if len(self.task.runfiles) > 0:
@@ -122,32 +116,97 @@ class TaskRun(object):
                 # TODO: If I start using runfiles again I should try and find out why the line below was needed
                 warnings.warn("Storing of runfiles in settings is currently not working correctly")
 
-    def _getFreeOutputDirectory(self, output_directory_base):
-        # create output directory
-        n = 0
-        output_dir = os.path.join(output_directory_base, "task_%s/" % (time.strftime("%Y%m%d_%H%M%S")))
-        while True:
-            try:
-                os.makedirs(output_dir)
-                break
-            except os.error:
-                output_dir = os.path.join(output_directory_base, "task_%s_%i/" % (time.strftime("%Y%m%d_%H%M%S"), n))
-                n += 1
-        return output_dir
-
     def communicate(self):
         return self.task_process.communicate()[1]
+    pass
 
 class BaseTask(object):
-    def __init__(self,num_processes,executable,settings,description,runfiles = [], generator = None, owner = None):
+    def __init__(self, generator, description, output_directory = None, output_directory_base = None, task_name = None, runfiles = [], owner = None, auto_run = False, exit_on_complete = False):
         if owner is None:
             owner = getpass.getuser()
 
-        (self.owner, self.num_processes, self.executable, self.settings, self.description, self.runfiles) = (owner, num_processes, executable, settings, description, runfiles)
+        (self.owner, self.description, self.runfiles) = (owner, description, runfiles)
         self.alreadyRun = False
         self.generator = generator
         self.taskfile = None
         self.initDone = False
+        self.task_name = task_name
+        self.allow_output_overwrite = False
+        self.output_directory = output_directory
+        self.output_directory_base = output_directory_base
+        self.exit_on_complete = exit_on_complete
+
+        if auto_run:
+            if self._hasTargetHostDefined():
+                self.generator += "interactive_settings = None"
+                self.enqueue(self._targetHost())
+            else:
+                self.run(self.output_directory)
+
+    def _hasTargetHostDefined(self):
+        if hasattr(self, 'runTargetHost') or hasattr(__builtin__, 'runTargetHost'):
+            return True
+        else:
+            return False
+
+    def _targetHost(self):
+        if hasattr(self, 'runTargetHost'):
+            return self.runTargetHost
+        else:
+            return __builtin__.runTargetHost
+
+    @staticmethod
+    def getFreeOutputDirectory(output_directory_base):
+        # find free output directory
+        n = 0
+        output_dir = os.path.join(output_directory_base, "task_%s/" % (time.strftime("%Y%m%d_%H%M%S")))
+        while True:
+            if os.path.exists(output_dir):
+                output_dir = os.path.join(output_directory_base, "task_%s_%i/" % (time.strftime("%Y%m%d_%H%M%S"), n))
+                n += 1
+            else:
+                break
+        return output_dir
+
+    def getGeneratorSaveFilename(self, output_directory):
+        return os.path.join(output_directory, 'runscript.py')
+
+    def save(self, output_directory):
+        """
+        Create a python script that will let me rerun this task without any
+        need for additional setup. This also serves as the main task
+        executable.
+        """
+        f = open(self.getGeneratorSaveFilename(output_directory), 'w')
+        f.write(self.generator)
+        f.close()
+
+    def enqueue(self, host = None):
+        """
+        try and enqueue this task on the taskerServer requested.
+        """
+        lsc_tasker.utils.sendTask(self, host)
+
+    def run(self, output_directory = None):
+        if output_directory is None:
+            if self.output_directory_base is not None:
+                output_directory_base = self.output_directory_base
+                if self.task_name is not None:
+                    output_directory = os.path.join(output_directory_base, self.task_name)
+                else:
+                    output_directory = self.getFreeOutputDirectory(output_directory_base=output_directory_base)
+                os.makedirs(output_directory)
+            else:
+                output_directory = None
+
+        self.output_directory = output_directory
+        if output_directory is not None:
+            self.save(output_directory)
+            print "Output being written to %s" % str(output_directory)
+
+        self._run(self.output_directory)
+        if self.exit_on_complete:
+            sys.exit(0)
 
     def __str__(self):
         string = ""
@@ -187,88 +246,16 @@ class BaseTask(object):
     #def initTaskRun(self, output_directory_base):
         #pass
 
-    def getRunArgs(self):
-        raise Exception("Any TaskClass should override this method")
+class CompoundTask(BaseTask):
+    def __init__(self, sub_tasks, generator, description, output_directory_base,
+                 task_name = None, runfiles = [], owner = None, auto_run = False,
+                 exit_on_complete = False):
 
-    def run(self, output_directory_base):
-        if hasattr(self.settings, 'interactive_settings') and self.settings.interactive_settings is not None:
-            # For now I will not spawn a new process of an interactive run, I should redo
-            # this later as the LSC-AMR cannot be run like this. Needs some better of IPC in python
-            import pysolver
-            if isinstance(self.settings, pysolver.Settings):
-                warnings.warn("Running pysolver directly without spawning a new process, no log will be created")
-                import pysolver.run_handler
-                self.settings.setOutputDirectory(output_directory_base)
-                import ipdb
-                with ipdb.launch_ipdb_on_exception():
-                    pysolver.run_handler.run(settings=self.settings)
-                return
-            else:
-                pass
-        with TaskRun(task=self, output_directory_base=output_directory_base, print_log=False) as task_run:
-            print task_run.communicate()
+        self.sub_tasks = sub_tasks
 
-    def get_parm_from_string(self, parm_str):
-        def get_leaf_parm(item, parm_tree):
-            if len(parm_tree) == 1:
-                node = getattr(item,parm_tree[0])
-                if inspect.ismethod(node):
-                    return node()
-                elif type(node) == list:
-                    return "\n" + "".join(["\t%s\n" % n for n in node])
-                else:
-                    return node
-            else:
-                return get_leaf_parm(getattr(item,parm_tree[0]), parm_tree[1:])
-        return get_leaf_parm(self,parm_str.split("."))
-
-    def set_parm_from_string(self, parm_str, value):
-        def set_leaf_parm(item, parm_tree, value):
-            if len(parm_tree) == 1:
-                setattr(item,parm_tree[0],value)
-            else:
-                set_leaf_parm(getattr(item,parm_tree[0]), parm_tree[1:],value)
-        set_leaf_parm(self,parm_str.split("."),value)
-
-
-    #def runAndReturnProcess(self, output_directory_base, logging_target = subprocess.PIPE):
-        #"""
-        #Call this method without defining the logging_target to run the task
-        #interactively.
-        #"""
-        #if not self.initDone:
-            #self.initTaskRun(output_directory_base)
-
-        #args = self._getRunArgs()
-        #print " ".join(args)
-        #return subprocess.Popen(args,stdout=logging_target,stderr=logging_target,stdin=subprocess.PIPE)
-
-    #def run(self, output_directory_base, logging_target = None):
-        #"""
-        #Call this method without defining the logging_target to run the task
-        #interactively.
-        #"""
-        #if not self.initDone:
-            #self.initTaskRun(output_directory_base)
-
-        #args = self._getRunArgs()
-
-        #proc = subprocess.Popen(args,stdout=logging_target,stderr=logging_target,stdin=subprocess.PIPE)
-        #print proc.communicate()[1]
-
-        ## TODO: Better interaction with the spawned subprocesses is needed here, but I'll do that
-        ##       another day. What I need ideally is to be able to emit certain things to the
-        ##       process and to asynchronously pool the process for output.
-        ##       http://stefaanlippens.net/python-asynchronous-subprocess-pipe-reading looks like a good
-        ##       starting point, basically the idea is place communication in queues.
-        ##       I want to be able to both place output in a log and to write it to screen
-
-        ##try:
-            ##print " ".join(args)
-            ##print self.settings
-        ##except KeyboardInterrupt:
-            ### clean-up log and exit gracefully
-            ##print 'does this catch it?'
+    def _run(self, output_directory):
+        for t in self.sub_tasks:
+            t.run()
 
 class ParameterStudyHelper:
     """
@@ -288,20 +275,20 @@ class ParameterStudyHelper:
         pass
 
 class SettingsGenerationHelper(object):
-    def __init__(self, generator_vars):
-        self.settings = generator_vars['settings']
-        self.generator_filename = generator_vars['__file__']
-        self.task_description = generator_vars['__doc__']
-        self.generator = open(self.generator_filename, 'r').read()
+    def __init__(self, generator, task_description, settings, output_dir):
+        self.settings = settings
+        self.task_description = task_description
+        self.generator = generator
+        self.output_dir = output_dir
 
     def run(self):
         """
         generate task and set output directory relative to the path of the generator
         """
         pycfd_basedir = self._getBasedir()
-        basedir_output = os.path.dirname(os.path.abspath(self.generator_filename))
+        basedir_output = self.output_dir
         task = self._makeTask()
-        task.run(output_directory_base=basedir_output)
+        return task.run(output_directory_base=basedir_output)
 
     def _makeTask(self):
         owner = getpass.getuser()
@@ -329,33 +316,32 @@ class SettingsGenerationHelper(object):
         task = self._makeTask()
         lsc_tasker.utils.sendTask(task, host)
 
-
 class UnknownSettingsTypeError(Exception):
     pass
 
-def loadSettingsFromFile(filename):
-    """
-    This function tries to load the contents of the given filename and interprete
-    the contents as settings object.
+#def loadSettingsFromFile(filename):
+    #"""
+    #This function tries to load the contents of the given filename and interprete
+    #the contents as settings object.
 
-    Since I now need to support both the format used by LSC-AMR and the YAML format
-    of the soundproof solvers I need to determine which I'm dealing with first. With
-    respect to the YAML format this is easy because the object type is saved with the
-    object content when I used YAML to serialise it. So I try with YAML first, and if
-    that fails we assume we're dealing with the LSC-AMR format. If all that fails,
-    bail.
-    """
+    #Since I now need to support both the format used by LSC-AMR and the YAML format
+    #of the soundproof solvers I need to determine which I'm dealing with first. With
+    #respect to the YAML format this is easy because the object type is saved with the
+    #object content when I used YAML to serialise it. So I try with YAML first, and if
+    #that fails we assume we're dealing with the LSC-AMR format. If all that fails,
+    #bail.
+    #"""
 
-    filehandle = open(filename,"r")
-    raw_settings = filehandle.read()
-    filehandle.close()
+    #filehandle = open(filename,"r")
+    #raw_settings = filehandle.read()
+    #filehandle.close()
 
-    try:
-        settings_object = yaml.load(raw_settings)
-        return settings_object
-    except yaml.scanner.ScannerError:
-        import py_lsc_amr
-        return py_lsc_amr.Settings.load(filename)
+    #try:
+        #settings_object = yaml.load(raw_settings)
+        #return settings_object
+    #except yaml.scanner.ScannerError:
+        #import py_lsc_amr
+        #return py_lsc_amr.Settings.load(filename)
 
 def writeTask(task, filename):
     taskfile = open(filename, "wb")
@@ -383,8 +369,8 @@ def loadTask(task_filename):
             except EOFError:
                 print "There was a problem with loading %s, unexpected end of file." % task_filename
                 return None
-            except yaml.constructor.ConstructorError:
-                print "The stored task object could not be recreated (%s)" % task_filename
+            #except yaml.constructor.ConstructorError:
+                #print "The stored task object could not be recreated (%s)" % task_filename
         else:
             return None
 
