@@ -61,7 +61,12 @@ class TaskRun(object):
     def spawnProcess(self, logging_target):
         saved_generator_filename = self.task.getGeneratorSaveFilename(self.output_directory)
 
-        args = ['/usr/bin/python', saved_generator_filename]
+        if 'VIRTUAL_ENV' in os.environ:
+            project_base_dir = os.environ['VIRTUAL_ENV']
+            args = [ os.path.join(project_base_dir, 'bin', 'python'), saved_generator_filename]
+        else:
+            args = [ '/usr/bin/python', saved_generator_filename]
+
         print " ".join(args)
         return subprocess.Popen(args,stdout=logging_target,stderr=logging_target,stdin=subprocess.PIPE)
 
