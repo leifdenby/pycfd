@@ -1,2 +1,1 @@
 export PATH=$PATH:$PYCFD/lsc_tasker/bin
-export PYTHONPATH=$PYTHONPATH:$PYCFD
