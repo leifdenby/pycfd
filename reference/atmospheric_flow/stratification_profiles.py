@@ -146,7 +146,7 @@ class NearIsentropic(HydrostaticallyBalancedAtmosphere):
         return "Near-isentropic (dry)"
 
 class LayeredMoistAtmosphere(object):
-    def __init__(self, layers, RH0, RH_min=None):
+    def __init__(self, layers, RH0, RH_min=None, rho0=None, p0=None):
         self.layers = layers
         self.RH_min = RH_min
         self.RH0 = RH0
@@ -158,8 +158,10 @@ class LayeredMoistAtmosphere(object):
 
         # ground state
         z_min = 0.0
-        rho0 = 1.205
-        p0 = 101325.0
+        if rho0 is None:
+            rho0 = 1.205
+        if p0 is None:
+            p0 = 101325.0
         RH0 = self.RH0
         for layer in self.layers:
             z_max = layer['z_max']
@@ -183,6 +185,9 @@ class LayeredMoistAtmosphere(object):
 
     def temp(self, pos):
         return self._get_values_from_layer('temp', pos)
+
+    def p(self, pos):
+        return self._get_values_from_layer('p', pos)
 
     def _get_values_from_layer(self, variable, pos):
 
@@ -220,53 +225,127 @@ class LayeredMoistAtmosphere(object):
 
         return T_dp(temp-273.15, rel_humidity) + 273.15
 
+class Soong1973(LayeredMoistAtmosphere):
+    def __init__(self, cloud_base_height=None):
+        self.cloud_base_height = cloud_base_height
 
-class Soong1972(LayeredMoistAtmosphere):
-    def __init__(self):
         layers = []
         dTdz_dry = -10.0e-3  # K/m
         dTdz_moist = -6.0e-3  # K/m
 
-        layer_thickness_0 = 800.0 # m
+        if self.cloud_base_height is not None:
+            layer_thickness_0 = self.cloud_base_height # m
+        else:
+            layer_thickness_0 = 800.0 # m
+
         RH0 = 0.70
         RH_LCL = 0.90
 
         dRHdz_0 = (RH_LCL - RH0)/layer_thickness_0  # %/m
         dRHdz_1 = -0.075e-3 # %/m
 
-        layers.append({'z_max': 800.0, 'dTdz': dTdz_dry, 'dRHdz': dRHdz_0})
+        layers.append({'z_max': layer_thickness_0, 'dTdz': dTdz_dry, 'dRHdz': dRHdz_0})
         layers.append({'z_max': 12800., 'dTdz': dTdz_moist, 'dRHdz': dRHdz_1})
         layers.append({'z_max': np.finfo('f').max, 'dTdz': 0.0, 'dRHdz': 0.0})
 
-        super(Soong1972, self).__init__(layers=layers, RH0=RH0, RH_min=0.3)
+        T0 = 25.0 + 273.15 #  [K], from Soong 1973 paper
+        p0 = 101325.0 #  [Pa], default value used, Soong 1973 doesn't give a value
+
+        gas_properties = ref_gas_properties.AtmosphericAir()
+        rho0 = p0/T0*1.0/gas_properties.R()
+
+        super(Soong1973, self).__init__(layers=layers, RH0=RH0, RH_min=0.3, rho0=rho0, p0=p0)
 
     def __str__(self):
-        return "Soong 1972 layered moist atmosphere"
+        if self.cloud_base_height is None:
+            return "Soong 1973 layered moist atmosphere"
+        else:
+            return "Soong 1973 layered moist atmosphere (with modified cloud base at %s)" % self.cloud_base_height
+
+class Soong1973Dry(LayeredMoistAtmosphere):
+    def __init__(self):
+        layers = []
+        dTdz_dry = -10.0e-3  # K/m
+        dTdz_moist = -6.0e-3  # K/m
+
+        layer_thickness_0 = 800.0 # m
+        RH0 = 0.00
+
+        layers.append({'z_max': 800.0, 'dTdz': dTdz_dry, 'dRHdz': 0.0})
+        layers.append({'z_max': 12800., 'dTdz': dTdz_moist, 'dRHdz': 0.0})
+        layers.append({'z_max': np.finfo('f').max, 'dTdz': 0.0, 'dRHdz': 0.0})
+
+        super(Soong1973Dry, self).__init__(layers=layers, RH0=RH0, RH_min=0.0)
+
+    def __str__(self):
+        return "Soong 1973 layered dry atmosphere"
+
+class SimpleMoistStable(LayeredMoistAtmosphere):
+    def __init__(self, cloud_base_height=None, dRHdz=None, RH_LCL=None):
+        self.cloud_base_height = cloud_base_height
+
+        layers = []
+        dTdz_dry = -10.0e-3  # K/m
+        dTdz_moist = -6.0e-3  # K/m
+
+        if self.cloud_base_height is not None:
+            layer_thickness_0 = self.cloud_base_height # m
+        else:
+            layer_thickness_0 = 800.0 # m
+
+        if dRHdz is None:
+            dRHdz = -0.2e-3 # %/m
+
+        self.dRHdz = dRHdz
+
+        RH0 = 0.70
+        if RH_LCL is None:
+            RH_LCL = 0.90
+
+        dRHdz_0 = (RH_LCL - RH0)/layer_thickness_0  # %/m
+        dRHdz_1 = self.dRHdz # %/m
+
+        layers.append({'z_max': layer_thickness_0, 'dTdz': dTdz_dry, 'dRHdz': dRHdz_0})
+        layers.append({'z_max': 12800., 'dTdz': dTdz_moist, 'dRHdz': dRHdz_1})
+        layers.append({'z_max': np.finfo('f').max, 'dTdz': 0.0, 'dRHdz': 0.0})
+
+        super(SimpleMoistStable, self).__init__(layers=layers, RH0=RH0, RH_min=0.2)
+
+    def __str__(self):
+        return "Simple stable moist atmosphere based on Soong1973 (dRHdz=%g%%/km)" % (self.dRHdz*1.e3)
 
 if __name__ == "__main__":
     from matplotlib import pyplot as plot
 
-    atmosphere = Soong1972()
+    atmosphere = Soong1973()
+    atmosphere = Soong1973()
 
     plot.ion()
     z = np.linspace(0.0, 20000.0, 100)
     temp = atmosphere.temp([z])
 
-    plot.subplot(121)
+    plot.subplot(131)
     plot.plot(atmosphere.temp([z]), z)
     #plot.plot(atmosphere.dew_point([z]), z)
     plot.xlabel("Temperature [K]")
     plot.ylabel("Height [m]")
     plot.grid(True)
 
-    plot.subplot(122)
+    plot.subplot(132)
     plot.plot(atmosphere.rel_humidity([z]), z)
     plot.xlabel("Relative humidity [%]")
     plot.ylabel("Height [m]")
     plot.xlim(0.0, 1.0)
     plot.grid(True)
 
-    plot.suptitle("Atmospheric stratification profile from Soong 1972")
+    plot.subplot(133)
+    plot.plot(atmosphere.p([z]), z)
+    plot.xlabel("Pressure [Pa]")
+    plot.ylabel("Height [m]")
+    plot.xlim(0.0, None)
+    plot.grid(True)
+
+    plot.suptitle("Atmospheric stratification profile from Soong 1973")
 
     plot.draw()
     raw_input()
