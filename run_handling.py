@@ -17,10 +17,31 @@ import inspect
 import multiprocessing
 import sys
 
+from subprocess import Popen, PIPE
+from threading  import Thread
+
 import __builtin__
 
 import lsc_tasker
 import lsc_tasker.utils
+
+HAS_PYNOTIFY = False
+try:
+    HAS_PYNOTIFY = True
+except ImportError:
+    pass
+
+def getFreeOutputDirectory(output_directory_base):
+    # find free output directory
+    n = 0
+    output_dir = os.path.join(output_directory_base, "task_%s/" % (time.strftime("%Y%m%d_%H%M%S")))
+    while True:
+        if os.path.exists(output_dir):
+            output_dir = os.path.join(output_directory_base, "task_%s_%i/" % (time.strftime("%Y%m%d_%H%M%S"), n))
+            n += 1
+        else:
+            break
+    return output_dir
 
 class TaskRunfile():
     def __init__(self, name, content, settings_param, description):
@@ -34,41 +55,107 @@ class LogEmitter(object):
         self.logfile = logfile
     def write(self, text):
         print text
-        self.logfile.write(text)
-        self.logfile.flush()
+        #self.logfile.write(text)
+        #self.logfile.flush()
     def fileno(self):
         return self.logfile.fileno()
+
+# http://stackoverflow.com/questions/4984428/python-subprocess-get-childrens-output-to-file-and-terminal/4985080#4985080
+def tee(infile, *files):
+    """Print `infile` to `files` in a separate thread."""
+    def fanout(infile, *files):
+        for line in iter(infile.readline, ''):
+            for f in files:
+                f.write(line)
+        infile.close()
+    t = Thread(target=fanout, args=(infile,)+files)
+    t.daemon = True
+    t.start()
+    return t
+
+
+class TeedCall:
+    def __init__(self, cmd_args, **kwargs):
+        stdout, stderr = [kwargs.pop(s, None) for s in 'stdout', 'stderr']
+        p = Popen(cmd_args,
+                  stdout=PIPE if stdout is not None else None,
+                  stderr=PIPE if stderr is not None else None,
+                  **kwargs)
+        threads = []
+        self.pid = p.pid
+        if stdout is not None:
+            threads.append(tee(p.stdout, stdout, sys.stdout))
+        if stderr is not None:
+            threads.append(tee(p.stderr, stderr, sys.stderr))
+        for t in threads:
+            t.join()  # wait for IO completion
+        p.wait()
+
+    def communicate(self):
+        return (None, None)
+
 
 class TaskRun(object):
     """
     This class contains all the logic required for keeping track of running
     a single task.
     """
-    def __init__(self, task, output_directory_base, print_log = False):
+    def __init__(self, task, output_directory_base, fork_process=False, override_output_directory=None, num_repeats=0):
         self.task = task
-        self.output_directory = BaseTask.getFreeOutputDirectory(output_directory_base=output_directory_base)
-        os.makedirs(self.output_directory)
-        self.print_log = print_log
-        task.save(self.output_directory)
 
-        #self._writeRunfiles()
-        self._setupLogfile()
+        if override_output_directory is not None:
+            self.output_directory = override_output_directory
+        else:
+            self.output_directory = BaseTask.getFreeOutputDirectory(output_directory_base=output_directory_base)
+            os.makedirs(self.output_directory)
+            task.save(self.output_directory)
+
+        self.print_log = not fork_process
+
+        self.fork_process = fork_process
+        self.num_repeats = num_repeats
+        self.current_run = -1
 
     def __enter__(self):
-        self.task_process = self.spawnProcess(logging_target=self.logging_target)
+        child_pid = None
+        if self.fork_process:
+            forked_pid = os.fork()
+            if forked_pid == 0:
+                child_pid = os.getpid()
+
+        self._setupLogfile()
+
+        if not self.fork_process or child_pid is not None:
+            self.task_process = self.spawnProcess(logging_target=self.logging_target)
+
+        try:
+            self.pid = self.task_process.pid
+        except AttributeError:
+            self.pid = None
+
+        if self.fork_process:
+            if self.pid is not None:
+                print "Forked process and running in pid %d" % self.pid
+                print "Output in %s" % self.output_directory
+            else:
+                class FakeProcess:
+                    def communicate(self):
+                        return (None, None)
+                self.task_process = FakeProcess()
+
         return self
 
     def spawnProcess(self, logging_target):
-        saved_generator_filename = self.task.getGeneratorSaveFilename(self.output_directory)
+        self.current_run += 1
 
-        if 'VIRTUAL_ENV' in os.environ:
-            project_base_dir = os.environ['VIRTUAL_ENV']
-            args = [ os.path.join(project_base_dir, 'bin', 'python'), saved_generator_filename]
+        executable = self.task.get_executable(outputdir=self.output_directory)
+
+        os.chdir(self.output_directory)
+        args = executable
+        if self.print_log:
+            return TeedCall(args, stdout=self.logfile, stderr=self.logfile)
         else:
-            args = [ '/usr/bin/python', saved_generator_filename]
-
-        print " ".join(args)
-        return subprocess.Popen(args,stdout=logging_target,stderr=logging_target,stdin=subprocess.PIPE)
+            return subprocess.Popen(args,bufsize=-1, stdout=logging_target,stderr=logging_target,stdin=subprocess.PIPE)
 
     def kill(self):
         self.__exit__(None, None, None)
@@ -77,23 +164,36 @@ class TaskRun(object):
         if self.task_process is not None:
             try:
                 self.task_process.kill()
-            except OSError:
+            except (OSError, AttributeError):
                 pass
-        self.logfile.close()
-        # clean up the log file (remove backspace characters)
-        logfile = open(self.log_filename)
-        logfile_content_old = logfile.readlines()
-        logfile.close()
 
-        logfile = open(self.log_filename,"w")
-        for line in logfile_content_old:
-            line = line.replace("\010","")
-            logfile.write(line)
-        logfile.close()
-        # for now we will output a bit of the log file, I haven't got tee working yet
-        #print
-        #print "Since tee doesn't work right now, here's the end of the log file:"
-        #print "".join(open(self.log_filename).readlines()[-20:])
+        if self.pid is not None:
+            if self.current_run < self.num_repeats:
+                self.task_process = self.spawnProcess(logging_target=self.logging_target)
+                self.task_process.communicate()
+
+                return self.__exit__(typ, val, traceback)
+
+            self.logfile.close()
+            # clean up the log file (remove backspace characters)
+            logfile = open(self.log_filename)
+            logfile_content_old = logfile.readlines()
+            logfile.close()
+
+            logfile = open(self.log_filename,"w+")
+            for line in logfile_content_old:
+                line = line.replace("\010","")
+                logfile.write(line)
+            logfile.close()
+
+            try:
+                import pynotify
+                pynotify.init("Basic")
+                n = pynotify.Notification("%s has finished running" % str(self.task), self.output_directory)
+                n.show()
+            except ImportError:
+                pass
+
 
     def _setupLogfile(self):
         # setup task logfile
@@ -101,6 +201,22 @@ class TaskRun(object):
         self.log_filename = log_filename
         self.logfile = open(log_filename, "w")
         self.logging_target = LogEmitter(self.logfile)
+
+    def communicate(self):
+        return self.task_process.communicate()[1]
+
+
+class ForkedTaskRun(TaskRun):
+    pass
+
+class RunfileBasedTaskRun(TaskRun):
+
+    def spawnProcess(self, logging_target):
+        saved_generator_filename = self.task.getGeneratorSaveFilename(self.output_directory)
+
+        args = ['/usr/bin/python', saved_generator_filename]
+        print " ".join(args)
+        return subprocess.Popen(args,stdout=logging_target,stderr=logging_target,stdin=subprocess.PIPE)
 
     def _writeRunfiles(self):
         # write the run files (these get written to the "runfiles" folder), and set the correct filename in the settings
@@ -120,10 +236,6 @@ class TaskRun(object):
                 import warnings
                 # TODO: If I start using runfiles again I should try and find out why the line below was needed
                 warnings.warn("Storing of runfiles in settings is currently not working correctly")
-
-    def communicate(self):
-        return self.task_process.communicate()[1]
-    pass
 
 class BaseTask(object):
     def __init__(self, generator, description, output_directory = None, output_directory_base = None, task_name = None, runfiles = [], owner = None, auto_run = False, exit_on_complete = False):

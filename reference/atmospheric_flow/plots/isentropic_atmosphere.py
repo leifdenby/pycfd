@@ -1,13 +1,13 @@
-import reference.atmospheric_flow.stratification_profiles
+from pycfd.reference.atmospheric_flow import stratification_profiles
 import pysolver.plotting
 import common
 
 import numpy as np
 
 profiles = {
-    'Isentropic': reference.atmospheric_flow.stratification_profiles.getStandardIsentropicAtmosphere(),
-    'Isothermal': reference.atmospheric_flow.stratification_profiles.getStandardIsothermalAtmosphere(),
-    'Constant Density': reference.atmospheric_flow.stratification_profiles.getConstantDensityAtmosphere(),
+    'Isentropic': stratification_profiles.getStandardIsentropicAtmosphere(),
+    'Isothermal': stratification_profiles.getStandardIsothermalAtmosphere(),
+    'Constant Density': stratification_profiles.getConstantDensityAtmosphere(),
 }
 
 
@@ -33,7 +33,7 @@ for title, profile in profiles.items():
     s = plot.subplot(223)
     plot.ylabel('height/m')
     plot.xlabel('potential temperature/K')
-    s.plot(profile.theta([z]), z, label=title)
+    s.plot(profile.pot_temperature([z]), z, label=title)
     plot.legend()
     plot.grid(True)
     s = plot.subplot(224)
