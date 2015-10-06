@@ -71,11 +71,20 @@ class HydrostaticallyBalancedAtmosphere(object):
         return "HydrostaticallyBalancedAtmosphere (rho0=%f, p0=%f, dTdz=%f) with %s" % (self.rho0, self.p0, self.dTdz, str(self.gas_properties))
 
     def temp(self, pos):
-        z = pos[-1]
+        p = np.array(pos)
+        if len(p.shape) > 1:
+            z = p[-1]
+        else:
+            z = p
         return self.T0 + self.dTdz*z
 
     def rho(self, pos):
-        z = pos[-1]
+        p = np.array(pos)
+        if len(p.shape) > 1:
+            z = p[-1]
+        else:
+            z = p
+
         if self.dTdz == 0.0:
             return self.rho0*np.exp(-z*self.g*self.gas_properties.M/(scipy.constants.R*1000.0*self.T0))
         else:
@@ -110,9 +119,14 @@ class HydrostaticallyBalancedAtmosphere(object):
         """
         return self.dTdz*scipy.constants.R*1000.0/self.gas_properties.M
 
-class HydrostaticallyBalancedMoistAtmosphere(HydrostaticallyBalancedAtmosphere):
+class PseudoHydrostaticallyBalancedMoistAtmosphere(HydrostaticallyBalancedAtmosphere):
+    """
+    Given an atmosphere with non-zero specific concentration of water vapour
+    and a fixed lapse rate it is not strictly guaranteed that the atmosphere
+    will be stable, and so the hydrostatic assumption is not strictly valid.
+    """
     def __init__(self, rho0, p0, dTdz, RH0, dRHdz, gas_properties, g=None):
-        super(HydrostaticallyBalancedMoistAtmosphere, self).__init__(rho0=rho0, p0=p0, dTdz=dTdz, gas_properties=gas_properties, g=g)
+        super(PseudoHydrostaticallyBalancedMoistAtmosphere, self).__init__(rho0=rho0, p0=p0, dTdz=dTdz, gas_properties=gas_properties, g=g)
 
         self.dRHdz = dRHdz
         self.RH0 = RH0
@@ -128,6 +142,71 @@ gamma = lambda T, RH : np.log(RH) + b*T/(c+T)
 P_a = lambda T, RH: a*np.exp(gamma(T, RH))
 T_dp = lambda T, RH: c*np.log(P_a(T, RH)/a)/(b-np.log(P_a(T, RH)/a))
 
+
+class LayeredAtmosphere(object):
+    def _get_values_from_layer(self, variable, pos):
+
+        if type(pos) in [float, np.float, np.float64 ]:
+            z = pos
+
+            for (z_min, z_max), layer in self.layer_instances.items():
+                if z_min <= z and z <= z_max:
+                    f = getattr(layer, variable)
+                    return f([z - z_min])
+
+        else:
+            pos = np.array(pos)
+            if len(pos.shape) > 1:
+                z = pos[-1]
+            else:
+                z = pos
+
+            values = np.zeros(z.shape)
+
+            for (z_min, z_max), layer in self.layer_instances.items():
+                idx_in_layer = np.logical_and(z_min <= z, z < z_max)
+                f = getattr(layer, variable)
+                values[idx_in_layer] = f([z[idx_in_layer] - z_min])
+
+            return values
+
+class LayeredDryAtmosphere(LayeredAtmosphere):
+    def __init__(self, layers, rho0=None, p0=None):
+        self.layers = layers
+        self.gas_properties = ref_gas_properties.AtmosphericAir()
+
+        # create an instance of HydroststaticallyBalancedAtmosphere for
+        # each layer
+        self.layer_instances = {}
+
+        # ground state
+        z_min = 0.0
+        if rho0 is None:
+            rho0 = 1.205
+        if p0 is None:
+            p0 = 101325.0
+        for layer in self.layers:
+            z_max = layer['z_max']
+            z = (z_min, z_max)
+            layer_instance = HydrostaticallyBalancedAtmosphere(rho0=rho0,
+                                                               p0=p0,
+                                                               dTdz=layer['dTdz'],
+                                                               gas_properties=self.gas_properties,
+                                                               )
+            self.layer_instances[z] = layer_instance
+
+            # calculate the start values of the next layer, remember that this
+            # layer is offset.
+            z_offset = z_max - z_min
+            z_min = z_max
+            rho0 = layer_instance.rho([z_offset])
+            p0 = layer_instance.p([z_offset])
+
+    def temp(self, pos):
+        return self._get_values_from_layer('temp', pos)
+
+    def p(self, pos):
+        return self._get_values_from_layer('p', pos)
 
 class NearIsentropic(HydrostaticallyBalancedAtmosphere):
     """
@@ -166,7 +245,7 @@ class LayeredMoistAtmosphere(object):
         for layer in self.layers:
             z_max = layer['z_max']
             z = (z_min, z_max)
-            layer_instance = HydrostaticallyBalancedMoistAtmosphere(rho0=rho0,
+            layer_instance = PseudoHydrostaticallyBalancedMoistAtmosphere(rho0=rho0,
                                                                     p0=p0,
                                                                     dTdz=layer['dTdz'],
                                                                     dRHdz=layer['dRHdz'],
@@ -191,7 +270,11 @@ class LayeredMoistAtmosphere(object):
 
     def _get_values_from_layer(self, variable, pos):
 
-        z = pos[-1]
+        if len(np.array(pos).shape) > 1:
+            z = pos[-1]
+        else:
+            z = pos
+
         try:
             values = np.zeros(z.shape)
 
@@ -233,12 +316,21 @@ class Soong1973(LayeredMoistAtmosphere):
         dTdz_dry = -10.0e-3  # K/m
         dTdz_moist = -6.0e-3  # K/m
 
+        RH0 = 0.70
+
         if self.cloud_base_height is not None:
             layer_thickness_0 = self.cloud_base_height # m
+            # TODO: This is completely arbitrary, the RH needs lowering that's
+            # for sure, not sure how much at this point
+            if cloud_base_height == 1600.:
+                RH0 = 0.50
+            elif cloud_base_height == 1100.:
+                RH0 = 0.59
+            else:
+                raise NotImplementedError
         else:
             layer_thickness_0 = 800.0 # m
 
-        RH0 = 0.70
         RH_LCL = 0.90
 
         dRHdz_0 = (RH_LCL - RH0)/layer_thickness_0  # %/m
@@ -262,20 +354,21 @@ class Soong1973(LayeredMoistAtmosphere):
         else:
             return "Soong 1973 layered moist atmosphere (with modified cloud base at %s)" % self.cloud_base_height
 
-class Soong1973Dry(LayeredMoistAtmosphere):
+class Soong1973Dry(LayeredDryAtmosphere):
     def __init__(self):
         layers = []
         dTdz_dry = -10.0e-3  # K/m
         dTdz_moist = -6.0e-3  # K/m
 
+        self.g = 10.0
+
         layer_thickness_0 = 800.0 # m
-        RH0 = 0.00
 
-        layers.append({'z_max': 800.0, 'dTdz': dTdz_dry, 'dRHdz': 0.0})
-        layers.append({'z_max': 12800., 'dTdz': dTdz_moist, 'dRHdz': 0.0})
-        layers.append({'z_max': np.finfo('f').max, 'dTdz': 0.0, 'dRHdz': 0.0})
+        layers.append({'z_max': 800.0, 'dTdz': dTdz_dry, })
+        layers.append({'z_max': 12800., 'dTdz': dTdz_moist, })
+        layers.append({'z_max': np.finfo('f').max, 'dTdz': 0.0, })
 
-        super(Soong1973Dry, self).__init__(layers=layers, RH0=RH0, RH_min=0.0)
+        super(Soong1973Dry, self).__init__(layers=layers, )
 
     def __str__(self):
         return "Soong 1973 layered dry atmosphere"
@@ -285,7 +378,7 @@ class SimpleMoistStable(LayeredMoistAtmosphere):
         self.cloud_base_height = cloud_base_height
 
         layers = []
-        dTdz_dry = -10.0e-3  # K/m
+        dTdz_dry = -8.0e-3  # K/m
         dTdz_moist = -6.0e-3  # K/m
 
         if self.cloud_base_height is not None:
