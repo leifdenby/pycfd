@@ -208,6 +208,9 @@ class LayeredDryAtmosphere(LayeredAtmosphere):
     def p(self, pos):
         return self._get_values_from_layer('p', pos)
 
+    def rho(self, pos):
+        return self._get_values_from_layer('rho', pos)
+
 class NearIsentropic(HydrostaticallyBalancedAtmosphere):
     """
     This profile is forced a little more stable that isentropic (neutral)
@@ -267,6 +270,9 @@ class LayeredMoistAtmosphere(object):
 
     def p(self, pos):
         return self._get_values_from_layer('p', pos)
+
+    def rho(self, pos):
+        return self._get_values_from_layer('rho', pos)
 
     def _get_values_from_layer(self, variable, pos):
 
