@@ -22,8 +22,12 @@ from threading  import Thread
 
 import __builtin__
 
-import lsc_tasker
-import lsc_tasker.utils
+try:
+    import lsc_tasker
+    import lsc_tasker.utils
+    # TODO: These need refactoring from the codebase I wrote at the start of my PhD
+except ImportError:
+    pass
 
 HAS_PYNOTIFY = False
 try:
