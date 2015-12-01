@@ -227,6 +227,23 @@ class NearIsentropic(HydrostaticallyBalancedAtmosphere):
     def __str__(self):
         return "Near-isentropic (dry)"
 
+class LayeredStable(LayeredDryAtmosphere):
+
+    def __init__(self):
+        gas_properties = ref_gas_properties.AtmosphericAir()
+        g = scipy.constants.g
+        dTdz = -g/gas_properties.cp()
+        rho0 = 1.205
+        p0 = 101325.0
+
+        layers = []
+        layers.append({'z_max': 2.0e3, 'dTdz': dTdz+1.0e-3,})
+        layers.append({'z_max': np.finfo('f').max, 'dTdz': dTdz+5.0e-3})
+        super(LayeredStable, self).__init__(layers=layers, rho0=rho0, p0=p0)
+
+    def __str__(self):
+        return "Very stable two-layered atmosphere"
+
 class LayeredMoistAtmosphere(object):
     def __init__(self, layers, RH0, RH_min=None, rho0=None, p0=None):
         self.layers = layers
@@ -404,11 +421,16 @@ class SimpleMoistStable(LayeredMoistAtmosphere):
         dRHdz_0 = (RH_LCL - RH0)/layer_thickness_0  # %/m
         dRHdz_1 = self.dRHdz # %/m
 
+        RH_min = 0.0  # 0.3
+        RH0 = 0.0
+        dRHdz_0 = 0.0
+        dRHdz_1 = 0.0
+
         layers.append({'z_max': layer_thickness_0, 'dTdz': dTdz_dry, 'dRHdz': dRHdz_0})
         layers.append({'z_max': 12800., 'dTdz': dTdz_moist, 'dRHdz': dRHdz_1})
         layers.append({'z_max': np.finfo('f').max, 'dTdz': 0.0, 'dRHdz': 0.0})
 
-        super(SimpleMoistStable, self).__init__(layers=layers, RH0=RH0, RH_min=0.2)
+        super(SimpleMoistStable, self).__init__(layers=layers, RH0=RH0, RH_min=RH_min)
 
     def __str__(self):
         return "Simple stable moist atmosphere based on Soong1973 (dRHdz=%g%%/km)" % (self.dRHdz*1.e3)
