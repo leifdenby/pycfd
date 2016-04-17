@@ -1,6 +1,7 @@
 import numpy as np
 import scipy.constants
 import scipy.optimize
+import scipy.interpolate
 from pycfd.reference.atmospheric_flow import gas_properties as ref_gas_properties
 
 def getStandardIsothermalAtmosphere():
@@ -467,10 +468,15 @@ class RICO:
     which is necessary to have surface fluxes.
     """
     def __init__(self, include_wind=False):
-        if include_wind:
-            raise NotImplementedError()
-
         from pyclouds import parameterisations
+
+        self.include_wind = include_wind
+        if include_wind:
+            self.u_wind = self._u_wind
+            self.v_wind = self._v_wind
+        else:
+            self.u_wind = lambda z: np.zeros_like(z)
+            self.v_wind = lambda z: np.zeros_like(z)
 
         # surface conditions
         self.ps = 101540.  # [Pa], surface pressure
@@ -624,8 +630,63 @@ class RICO:
         else:
             return 297.9 + (317.0 - 297.9)/(4000 - 740) *(z - 740)
 
+    @np.vectorize
+    def _u_wind(z):
+        """
+        u-component of wind
+        """
+        if z > 0.0:
+            return -9.9 + 2.0e-3*z
+        else:
+            return 0.0
+
+
+    @np.vectorize
+    def _v_wind(z):
+        """
+        v-component of wind
+        """
+        if z > 0.0:
+            return -3.8 
+        else:
+            return 0.0
+
+    @np.vectorize
+    def ddt_T_ls(z):
+        """
+        Large Scale Horizontal Liq. Water Pot. Temperature Advection combined
+        with Radiative Cooling [K/s] 
+
+        NB: Initial profile contains no liquid water so `temp = pot. temp`
+        """
+        if z > 0:
+            return -2.5 / 86400
+        else:
+            return 0.0
+
+    @np.vectorize
+    def ddt_qv_ls(z):
+        """
+        Large Scale Horizontal Moisture Advection [(kg/kg)/s]
+
+        NB: not exactly as the KNMI website because we want to return tendencies
+        in kg/kg/s, not g/kg/s
+        """
+        if 0 < z <= 2980:
+            return -1.0 / 86400 + (1.3456/ 86400) * z / 2980 * 1.0e-3
+        elif z > 2980:
+            return 4. *10-6  * 1.0e-3
+        else:
+            return 0.0
+
+    @np.vectorize
+    def tke(z):
+        """Initial subgrid profile of subgrid TKE"""
+        return  1 - z/4000
+
+
     def __str__(self):
-        return "RICO, LES test case from KNMI"
+        return "RICO, LES test case from KNMI (%s wind)" % ['without', 'with'][self.include_wind]
 
 class RICO_SCM:
     @np.vectorize
@@ -665,6 +726,32 @@ class RICO_SCM:
     def _create_profile():
         pass
 
+
+class DiscreteProfile():
+    """
+    Wrapper for discretely defined ambient profile which exposes the same
+    interface as the general profiles but uses interpolation internally
+    """
+
+    def __init__(self, z, **kwargs):
+        self.vars = kwargs
+        self.z = z
+
+        if 'T' in kwargs and not 'temp' in kwargs:
+            self.vars['temp'] = kwargs['T']
+
+    def __getattr__(self, name):
+        if name in self.__dict__:
+            return self.__dict__[name]
+        elif name in self.vars:
+            y_discrete = self.vars[name]
+
+            return scipy.interpolate.interp1d(x=self.z, y=y_discrete)
+
+        else:
+            raise AttributeError
+
+
 if __name__ == "__main__":
     # from matplotlib import pyplot as plot
 
@@ -700,6 +787,7 @@ if __name__ == "__main__":
 
     # plot.draw()
     # raw_input()
+
 
     r = RICO()
 
