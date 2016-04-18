@@ -246,8 +246,10 @@ class NearIsentropic(HydrostaticallyBalancedAtmosphere):
         dTdz = -g/gas_properties.cp() + dTdz_offset
         super(NearIsentropic, self).__init__(rho0=rho0, p0=p0, dTdz=dTdz, gas_properties=gas_properties, g=g)
 
+        self.dTdz_offset = dTdz_offset
+
     def __str__(self):
-        return "Near-isentropic (dry)"
+        return "Near-isentropic, dTdz_offset={offset}K/km (dry)".format(offset=self.dTdz_offset*1.e3)
 
 class LayeredStable(LayeredDryAtmosphere):
 
