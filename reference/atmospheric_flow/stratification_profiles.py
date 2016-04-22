@@ -193,9 +193,12 @@ class LayeredAtmosphere(object):
             return values
 
 class LayeredDryAtmosphere(LayeredAtmosphere):
-    def __init__(self, layers, rho0=None, p0=None):
+    def __init__(self, layers, rho0=None, p0=None, gas_properties=None):
         self.layers = layers
-        self.gas_properties = ref_gas_properties.AtmosphericAir()
+        if gas_properties is None:
+            self.gas_properties = ref_gas_properties.AtmosphericAir()
+        else:
+            self.gas_properties = gas_properties
 
         # create an instance of HydroststaticallyBalancedAtmosphere for
         # each layer
@@ -445,10 +448,7 @@ class SimpleMoistStable(LayeredMoistAtmosphere):
         dRHdz_0 = (RH_LCL - RH0)/layer_thickness_0  # %/m
         dRHdz_1 = self.dRHdz # %/m
 
-        RH_min = 0.0  # 0.3
-        RH0 = 0.0
-        dRHdz_0 = 0.0
-        dRHdz_1 = 0.0
+        RH_min = 0.3
 
         layers.append({'z_max': layer_thickness_0, 'dTdz': dTdz_dry, 'dRHdz': dRHdz_0})
         layers.append({'z_max': 12800., 'dTdz': dTdz_moist, 'dRHdz': dRHdz_1})
@@ -753,42 +753,139 @@ class DiscreteProfile():
         else:
             raise AttributeError
 
+class TwoLayerMoistIsentropicPBL():
+    """
+    Moist sub-saturated well-mixed (isentropic and constant water vapour
+    concentration) boundary layer with a layer above with higher lapse-rate"""
+    def __init__(self, z_BL, RH0, T0, dRTdz_1=-0.1e-3, p0=101325.):
+        self.z_BL = z_BL
+        self.T0 = T0
+        self.p0 = p0
+
+        from pyclouds.common import default_constants, AttrDict
+
+        constants = AttrDict(default_constants)
+        cp_v = constants.cp_v
+        cp_d = constants.cp_d
+        R_v = constants.R_v
+        R_d = constants.R_d
+        g = scipy.constants.g
+
+        layers = []
+
+        qv_sat_0 = self.qv_sat(z=0.)
+        q_v = RH0*qv_sat_0
+        q_d = 1. - q_v
+
+        self.q_v0 = q_v
+
+        cp = q_v*cp_v + q_d*cp_d
+        R = q_v*R_v + q_d*R_d
+
+        rho0 = p0/(R*T0)
+
+        self.dTdz_BL = -g/cp
+        self.dTdz_2 = -6.0e-3  # K/m
+
+        self.dRHdz_1 = dRTdz_1
+
+        # TODO: would be nice to abstract this away to have a better storage
+        # for gas-mixture properties
+        gas_properties = AttrDict(M=scipy.constants.R*1000./R)
+
+        self.BL_profile = HydrostaticallyBalancedAtmosphere(
+            rho0=rho0, p0=p0, dTdz=self.dTdz_BL, gas_properties=gas_properties)
+
+        p_BL_top = self.BL_profile.p(z_BL)
+        T_BL_top = self.BL_profile.temp(z_BL)
+
+        rho_BL_top = p_BL_top/(R*T_BL_top)
+
+        self.TOP_profile = HydrostaticallyBalancedAtmosphere(
+            rho0=rho_BL_top,
+            p0=p_BL_top,
+            dTdz=self.dTdz_2,
+            gas_properties=gas_properties,
+        )
+
+    def qv_sat(self, z):
+        from pyclouds import parameterisations
+        T = self.temp(z)
+        p = self.p(z)
+        return parameterisations.pv_sat.qv_sat(T=T, p=p)
+
+    def temp(self, z):
+        @np.vectorize
+        def f(z):
+            if z == 0.:
+                return self.T0
+            elif z < self.z_BL:
+                return self.BL_profile.temp(z)
+            else:
+                return self.TOP_profile.temp(z - self.z_BL)
+        return f(z)
+
+    def p(self, z):
+        @np.vectorize
+        def f(z):
+            if z == 0.:
+                return self.p0
+            elif z < self.z_BL:
+                return self.BL_profile.p(z)
+            else:
+                return self.TOP_profile.p(z - self.z_BL)
+        return f(z)
+
+    def rel_humid(self, z):
+        @np.vectorize
+        def f(z):
+            if z <= self.z_BL:
+                qv_sat = self.qv_sat(z)
+
+                return self.q_v0/qv_sat
+            else:
+                RH_BL_top = self.rel_humid(self.z_BL)
+
+                return RH_BL_top + (z - self.z_BL)*self.dRHdz_1
+
+
+        return f(z)
+
 
 if __name__ == "__main__":
-    # from matplotlib import pyplot as plot
+    from matplotlib import pyplot as plot
 
-    # atmosphere = Soong1973()
-    # atmosphere = Soong1973()
+    profile = Soong1973()
 
-    # plot.ion()
-    # z = np.linspace(0.0, 20000.0, 100)
-    # temp = atmosphere.temp([z])
+    plot.ion()
+    z = np.linspace(0.0, 20000.0, 100)
+    temp = profile.temp([z])
 
-    # plot.subplot(131)
-    # plot.plot(atmosphere.temp([z]), z)
-    # #plot.plot(atmosphere.dew_point([z]), z)
-    # plot.xlabel("Temperature [K]")
-    # plot.ylabel("Height [m]")
-    # plot.grid(True)
+    plot.subplot(131)
+    plot.plot(profile.temp([z]), z)
+    #plot.plot(profile.dew_point([z]), z)
+    plot.xlabel("Temperature [K]")
+    plot.ylabel("Height [m]")
+    plot.grid(True)
 
-    # plot.subplot(132)
-    # plot.plot(atmosphere.rel_humidity([z]), z)
-    # plot.xlabel("Relative humidity [%]")
-    # plot.ylabel("Height [m]")
-    # plot.xlim(0.0, 1.0)
-    # plot.grid(True)
+    plot.subplot(132)
+    plot.plot(profile.rel_humidity([z]), z)
+    plot.xlabel("Relative humidity [%]")
+    plot.ylabel("Height [m]")
+    plot.xlim(0.0, 1.0)
+    plot.grid(True)
 
-    # plot.subplot(133)
-    # plot.plot(atmosphere.p([z]), z)
-    # plot.xlabel("Pressure [Pa]")
-    # plot.ylabel("Height [m]")
-    # plot.xlim(0.0, None)
-    # plot.grid(True)
+    plot.subplot(133)
+    plot.plot(profile.p([z]), z)
+    plot.xlabel("Pressure [Pa]")
+    plot.ylabel("Height [m]")
+    plot.xlim(0.0, None)
+    plot.grid(True)
 
-    # plot.suptitle("Atmospheric stratification profile from Soong 1973")
+    plot.suptitle("Atmospheric stratification profile from Soong 1973")
 
-    # plot.draw()
-    # raw_input()
+    plot.draw()
+    raw_input()
 
 
     r = RICO()
