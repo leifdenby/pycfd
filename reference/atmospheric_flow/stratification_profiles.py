@@ -757,10 +757,13 @@ class TwoLayerMoistIsentropicPBL():
     """
     Moist sub-saturated well-mixed (isentropic and constant water vapour
     concentration) boundary layer with a layer above with higher lapse-rate"""
-    def __init__(self, z_BL, RH0, T0, dRTdz_1=-0.1e-3, p0=101325.):
+    def __init__(self, z_BL, RH0, T0, dRHdz_1=-0.1e-3, p0=101325., dTdz_mid=-6.0e-3, z_top=1.4e3):
         self.z_BL = z_BL
         self.T0 = T0
         self.p0 = p0
+        self.RH0 = RH0
+
+        self.z_top = z_top
 
         from pyclouds.common import default_constants, AttrDict
 
@@ -785,9 +788,9 @@ class TwoLayerMoistIsentropicPBL():
         rho0 = p0/(R*T0)
 
         self.dTdz_BL = -g/cp
-        self.dTdz_2 = -6.0e-3  # K/m
+        self.dTdz_2 = dTdz_mid  # K/m
 
-        self.dRHdz_1 = dRTdz_1
+        self.dRHdz_1 = dRHdz_1
 
         # TODO: would be nice to abstract this away to have a better storage
         # for gas-mixture properties
@@ -801,10 +804,21 @@ class TwoLayerMoistIsentropicPBL():
 
         rho_BL_top = p_BL_top/(R*T_BL_top)
 
-        self.TOP_profile = HydrostaticallyBalancedAtmosphere(
+        self.MIDDLE_profile = HydrostaticallyBalancedAtmosphere(
             rho0=rho_BL_top,
             p0=p_BL_top,
             dTdz=self.dTdz_2,
+            gas_properties=gas_properties,
+        )
+
+        rho_top = self.rho(self.z_top)
+        p_top = self.p(self.z_top)
+
+        self.dRHdz_2 = -0.4e-3
+        self.TOP_profile = HydrostaticallyBalancedAtmosphere(
+            rho0=rho_top,
+            p0=p_top,
+            dTdz=0.0,
             gas_properties=gas_properties,
         )
 
@@ -819,10 +833,12 @@ class TwoLayerMoistIsentropicPBL():
         def f(z):
             if z == 0.:
                 return self.T0
-            elif z < self.z_BL:
+            elif z <= self.z_BL:
                 return self.BL_profile.temp(z)
+            elif z <= self.z_top:
+                return self.MIDDLE_profile.temp(z - self.z_BL)
             else:
-                return self.TOP_profile.temp(z - self.z_BL)
+                return self.TOP_profile.temp(z - self.z_top)
         return f(z)
 
     def p(self, z):
@@ -830,26 +846,47 @@ class TwoLayerMoistIsentropicPBL():
         def f(z):
             if z == 0.:
                 return self.p0
-            elif z < self.z_BL:
+            elif z <= self.z_BL:
                 return self.BL_profile.p(z)
+            elif z <= self.z_top:
+                return self.MIDDLE_profile.p(z - self.z_BL)
             else:
-                return self.TOP_profile.p(z - self.z_BL)
+                return self.TOP_profile.p(z - self.z_top)
         return f(z)
 
-    def rel_humid(self, z):
+    def rel_humidity(self, z):
         @np.vectorize
         def f(z):
             if z <= self.z_BL:
                 qv_sat = self.qv_sat(z)
 
                 return self.q_v0/qv_sat
-            else:
-                RH_BL_top = self.rel_humid(self.z_BL)
+            elif z <= self.z_top:
+                RH_BL_top = self.rel_humidity(self.z_BL)
 
                 return RH_BL_top + (z - self.z_BL)*self.dRHdz_1
+            else:
+                RH_top = self.rel_humidity(self.z_top)
 
+                return RH_top + (z - self.z_top)*self.dRHdz_2
 
         return f(z)
+
+    def q_v(self, z):
+        return self.rel_humidity(z)*self.qv_sat(z)
+
+
+    def rho(self, z):
+        @np.vectorize
+        def f(z):
+            if z == 0.:
+                return self.p0
+            elif z < self.z_BL:
+                return self.BL_profile.rho(z)
+            else:
+                return self.MIDDLE_profile.rho(z - self.z_BL)
+        return f(z)
+
 
 
 if __name__ == "__main__":
