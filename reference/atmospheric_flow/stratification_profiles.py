@@ -1,5 +1,7 @@
 import numpy as np
 import scipy.constants
+import scipy.optimize
+import scipy.interpolate
 from pycfd.reference.atmospheric_flow import gas_properties as ref_gas_properties
 
 def getStandardIsothermalAtmosphere():
@@ -142,8 +144,28 @@ gamma = lambda T, RH : np.log(RH) + b*T/(c+T)
 P_a = lambda T, RH: a*np.exp(gamma(T, RH))
 T_dp = lambda T, RH: c*np.log(P_a(T, RH)/a)/(b-np.log(P_a(T, RH)/a))
 
+class AttrDict:
+    def __init__(self, d):
+        self.__dict__ = d
+
 
 class LayeredAtmosphere(object):
+    def __init__(self, layers):
+        self.layer_instances = {}
+
+        # ground state
+        z_min = 0.0
+        for layer in layers:
+            z_max = layer['z_max']
+            z = (z_min, z_max)
+            layer_instance = AttrDict(layer)
+            self.layer_instances[z] = layer_instance
+
+            # calculate the start values of the next layer, remember that this
+            # layer is offset.
+            z_offset = z_max - z_min
+            z_min = z_max
+
     def _get_values_from_layer(self, variable, pos):
 
         if type(pos) in [float, np.float, np.float64 ]:
@@ -152,7 +174,7 @@ class LayeredAtmosphere(object):
             for (z_min, z_max), layer in self.layer_instances.items():
                 if z_min <= z and z <= z_max:
                     f = getattr(layer, variable)
-                    return f([z - z_min])
+                    return f(z - z_min)
 
         else:
             pos = np.array(pos)
@@ -171,9 +193,12 @@ class LayeredAtmosphere(object):
             return values
 
 class LayeredDryAtmosphere(LayeredAtmosphere):
-    def __init__(self, layers, rho0=None, p0=None):
+    def __init__(self, layers, rho0=None, p0=None, gas_properties=None):
         self.layers = layers
-        self.gas_properties = ref_gas_properties.AtmosphericAir()
+        if gas_properties is None:
+            self.gas_properties = ref_gas_properties.AtmosphericAir()
+        else:
+            self.gas_properties = gas_properties
 
         # create an instance of HydroststaticallyBalancedAtmosphere for
         # each layer
@@ -224,8 +249,27 @@ class NearIsentropic(HydrostaticallyBalancedAtmosphere):
         dTdz = -g/gas_properties.cp() + dTdz_offset
         super(NearIsentropic, self).__init__(rho0=rho0, p0=p0, dTdz=dTdz, gas_properties=gas_properties, g=g)
 
+        self.dTdz_offset = dTdz_offset
+
     def __str__(self):
-        return "Near-isentropic (dry)"
+        return "Near-isentropic, dTdz_offset={offset}K/km (dry)".format(offset=self.dTdz_offset*1.e3)
+
+class LayeredStable(LayeredDryAtmosphere):
+
+    def __init__(self):
+        gas_properties = ref_gas_properties.AtmosphericAir()
+        g = scipy.constants.g
+        dTdz = -g/gas_properties.cp()
+        rho0 = 1.205
+        p0 = 101325.0
+
+        layers = []
+        layers.append({'z_max': 2.0e3, 'dTdz': dTdz+1.0e-3,})
+        layers.append({'z_max': np.finfo('f').max, 'dTdz': dTdz+5.0e-3})
+        super(LayeredStable, self).__init__(layers=layers, rho0=rho0, p0=p0)
+
+    def __str__(self):
+        return "Very stable two-layered atmosphere"
 
 class LayeredMoistAtmosphere(object):
     def __init__(self, layers, RH0, RH_min=None, rho0=None, p0=None):
@@ -404,41 +448,472 @@ class SimpleMoistStable(LayeredMoistAtmosphere):
         dRHdz_0 = (RH_LCL - RH0)/layer_thickness_0  # %/m
         dRHdz_1 = self.dRHdz # %/m
 
+        RH_min = 0.3
+
         layers.append({'z_max': layer_thickness_0, 'dTdz': dTdz_dry, 'dRHdz': dRHdz_0})
         layers.append({'z_max': 12800., 'dTdz': dTdz_moist, 'dRHdz': dRHdz_1})
         layers.append({'z_max': np.finfo('f').max, 'dTdz': 0.0, 'dRHdz': 0.0})
 
-        super(SimpleMoistStable, self).__init__(layers=layers, RH0=RH0, RH_min=0.2)
+        super(SimpleMoistStable, self).__init__(layers=layers, RH0=RH0, RH_min=RH_min)
 
     def __str__(self):
         return "Simple stable moist atmosphere based on Soong1973 (dRHdz=%g%%/km)" % (self.dRHdz*1.e3)
 
+
+class RICO:
+    """
+    Based on KNMI's synthesis of the RICO field compaign for a LES intercomparison study
+
+    http://projects.knmi.nl/rico/setup3d.html
+
+    OBS: The sea surface temperature is different from the temperature at z=0m,
+    which is necessary to have surface fluxes.
+    """
+    def __init__(self, include_wind=False):
+        from pyclouds import parameterisations
+
+        self.include_wind = include_wind
+        if include_wind:
+            self.u_wind = self._u_wind
+            self.v_wind = self._v_wind
+        else:
+            self.u_wind = lambda z: np.zeros_like(z)
+            self.v_wind = lambda z: np.zeros_like(z)
+
+        # surface conditions
+        self.ps = 101540.  # [Pa], surface pressure
+        self.p0 = 100000. # [Pa], reference pressure
+        self.Ts = 299.8  # [K], sea surface temperature
+
+        # constants
+        self.Lv = 2.5e6  # [J/kg]
+        self.c_p = 1005. # [J/kg/K]
+        self.g = 9.81    # [m/s^2]
+        self.R_d = 287.  # [J/kg/K]
+
+        # XXX: R_v and cp_v are not given in the RICO test definition on the
+        # the KNMI site I will use what I believe are standard values here
+        self.R_v = parameterisations.common.default_constants.get('R_v')
+        self.cp_v = parameterisations.common.default_constants.get('cp_v')
+
+        self.z_max = 4e3
+
+        self._create_profile()
+
+    def _create_profile(self):
+        """ Create a vertical profile that we can interpolate into later. 
+        Integrating with the hydrostatic assumption.
+        """
+        from pyclouds import parameterisations
+
+        parameterisation = parameterisations.SaturationVapourPressure()
+
+        dz = 100.
+        R_d = self.R_d
+
+        R_v = self.R_v
+        R_d = self.R_d
+        cp_d = self.c_p
+        cp_v = self.cp_v
+
+        z = 0.0
+        p = self.ps
+
+        # Cathy suggested using the liquid water potential temperature as the
+        # temperature in the first model level
+        T = self.theta_l(0.0)
+
+        profile = []
+
+        n = 0
+        while z < self.z_max:
+            qt = self.q_t(z)
+
+            # assume no liquid water
+            ql = 0.0
+            qv = qt
+
+            qd = 1.0 - qt
+
+            theta_l = self.theta_l(z)
+
+            R_l = R_d*qd + R_v*qv
+            c_l = cp_d*qd + cp_v*qv
+
+            T = theta_l/((self.p0/p)**(R_l/c_l))
+            # T = self.iteratively_find_temp(theta_l=theta_l, p=p, q_t=qt, q_l=ql, T_initial=T)
+
+            rho = 1.0/((qd*R_d + qv*R_v)*T/p) # + 1.0/(ql/rho_l), ql = 0.0
+
+            profile.append((z, rho, p, T))
+
+            # integrate pressure
+            z += dz
+            p += - rho * self.g * dz
+
+            n += 1
+
+        self._profile = np.array(profile)
+
+    def iteratively_find_temp(self, theta_l, p, q_t, q_l, T_initial):
+        R_v = self.R_v
+        R_d = self.R_d
+        cp_d = self.c_p
+        cp_v = self.cp_v
+
+        p0 = self.p0
+        omega_l = 1.0
+        L_v = self.Lv
+
+        R_l = R_d*(1.0 - q_t) + R_v*q_t
+        c_l = cp_d*(1.0 - q_t) + cp_v*q_t
+
+        C = R_l/c_l*np.log(p0/p) + np.log(omega_l) - np.log(theta_l)
+
+        theta_l_f = lambda T: T*(p0/p)**(R_l/c_l)*omega_l*np.exp(- L_v * q_l /( c_l * T))
+
+        f = lambda T: C + np.log(T) - L_v*q_l/(c_l*T)
+        T = scipy.optimize.brentq(f, 1., 410.)
+
+        if np.isnan(T):
+            raise Exception("Integration failed")
+
+        if not np.abs(theta_l_f(T) - theta_l) < 1.0e-10:
+            print theta_l_f(T), theta_l, np.abs(theta_l_f(T) - theta_l) 
+
+        return T
+
+    def _get_value_from_precomputed_profile(self, pos, var_indx):
+        z = self._profile[:,0]
+        if np.any(z > self.z_max):
+            raise Exception("RICO test case is only defined for z < 7km")
+        T = self._profile[:,var_indx]
+        return np.interp(pos, z, T)
+
+    def rho(self, pos):
+        return self._get_value_from_precomputed_profile(pos, 1)
+
+    def p(self, pos):
+        return self._get_value_from_precomputed_profile(pos, 2)
+
+    def temp(self, pos):
+        return self._get_value_from_precomputed_profile(pos, 3)
+
+    def rel_humidity(self, z):
+        q_v = self.q_t(z)
+        p = self.p(z)
+        T = self.temp(z)
+
+        from pyclouds import parameterisations
+        parameterisation = parameterisations.SaturationVapourPressure()
+
+        qv_sat = parameterisation.qv_sat(T=T, p=p)
+
+        return q_v/qv_sat
+
+    def q_t(self, z):
+        """ Total water specific concentration [kg/kg]"""
+        return self._q_t(z)/1000.
+
+    @np.vectorize
+    def _q_t(z):
+        if 0 <= z < 740:
+            return 16.0 + (13.8 - 16.0) / (740) * z
+        if 740 < z < 3260:
+            return 13.8 + (2.4 - 13.8) / (3260 - 740)*(z - 740)
+        else:
+            return 2.4 + (1.8 - 2.4)/(4000 - 3260)*(z - 3260) 
+
+    @np.vectorize
+    def theta_l(z):
+        """ Liquid water potential temperature [K]"""
+        if 0 <= z < 740:
+            return 297.9
+        else:
+            return 297.9 + (317.0 - 297.9)/(4000 - 740) *(z - 740)
+
+    @np.vectorize
+    def _u_wind(z):
+        """
+        u-component of wind
+        """
+        if z > 0.0:
+            return -9.9 + 2.0e-3*z
+        else:
+            return 0.0
+
+
+    @np.vectorize
+    def _v_wind(z):
+        """
+        v-component of wind
+        """
+        if z > 0.0:
+            return -3.8 
+        else:
+            return 0.0
+
+    @np.vectorize
+    def ddt_T_ls(z):
+        """
+        Large Scale Horizontal Liq. Water Pot. Temperature Advection combined
+        with Radiative Cooling [K/s] 
+
+        NB: Initial profile contains no liquid water so `temp = pot. temp`
+        """
+        if z > 0:
+            return -2.5 / 86400
+        else:
+            return 0.0
+
+    @np.vectorize
+    def ddt_qv_ls(z):
+        """
+        Large Scale Horizontal Moisture Advection [(kg/kg)/s]
+
+        NB: not exactly as the KNMI website because we want to return tendencies
+        in kg/kg/s, not g/kg/s
+        """
+        if 0 < z <= 2980:
+            return -1.0 / 86400 + (1.3456/ 86400) * z / 2980 * 1.0e-3
+        elif z > 2980:
+            return 4. *10-6  * 1.0e-3
+        else:
+            return 0.0
+
+    @np.vectorize
+    def tke(z):
+        """Initial subgrid profile of subgrid TKE"""
+        return  1 - z/4000
+
+
+    def __str__(self):
+        return "RICO, LES test case from KNMI (%s wind)" % ['without', 'with'][self.include_wind]
+
+class RICO_SCM:
+    @np.vectorize
+    def temp(self, z):
+        if 0.0 <= z < 740.:
+            return 299.2 + (292.0 - 299.2) / (740) * z 
+        elif 740 < z < 4000:
+            return 292.0 + (278.0 - 292.0) / (4000 - 740) * (z - 740)
+        elif 4000 < z < 15000:
+            return 278.0 + (203.0 - 278.0) / (15000 - 4000) * (z - 4000)
+        elif 15000 < z < 17500:
+            return 203.0 + (194.0 - 203.0) / (17500 - 15000)* (z - 15000)
+        elif 17500 < z < 20000:
+            return 194.0 + (206.0 - 194.0) / (20000 - 17500)* (z - 17500)
+        elif 20000 < z < 60000:
+            return 206.0 + (270.0 - 206.0) / (60000 - 20000)* (z - 20000) 
+        else:
+            raise Exception("z out of range")
+
+    def q_v(self, z):
+        """ Water vapour specific concentration in [kg/kg]"""
+        return self._q_v(z)/1000.
+
+    @np.vectorize
+    def _q_v(z):
+        if 0 <= z < 740:
+            return 16.0 + (13.8 - 16.0) / (740) * z
+        elif 740 < z < 3260:
+            return 13.8 + (2.4 - 13.8) / (3260 - 740) * (z - 740)
+        elif 3260 < z < 4000:
+            return 2.4 + (1.8 - 2.4) / (4000 - 3260) * (z - 3260)
+        elif 4000 < z < 9000:
+            return 1.8 + (0 - 1.8) / (10000 - 4000) * (z - 4000)
+        else:
+            return 0.0
+
+    def _create_profile():
+        pass
+
+
+class DiscreteProfile():
+    """
+    Wrapper for discretely defined ambient profile which exposes the same
+    interface as the general profiles but uses interpolation internally
+    """
+
+    def __init__(self, z, **kwargs):
+        self.vars = kwargs
+        self.z = z
+
+        if 'T' in kwargs and not 'temp' in kwargs:
+            self.vars['temp'] = kwargs['T']
+
+    def __getattr__(self, name):
+        if name in self.__dict__:
+            return self.__dict__[name]
+        elif name in self.vars:
+            y_discrete = self.vars[name]
+
+            return scipy.interpolate.interp1d(x=self.z, y=y_discrete)
+
+        else:
+            raise AttributeError
+
+class TwoLayerMoistIsentropicPBL():
+    """
+    Moist sub-saturated well-mixed (isentropic and constant water vapour
+    concentration) boundary layer with a layer above with higher lapse-rate"""
+    def __init__(self, z_BL, RH0, T0, dRHdz_1=-0.1e-3, p0=101325., dTdz_mid=-6.0e-3, z_top=1.4e3):
+        self.z_BL = z_BL
+        self.T0 = T0
+        self.p0 = p0
+        self.RH0 = RH0
+
+        self.z_top = z_top
+
+        from pyclouds.common import default_constants, AttrDict
+
+        constants = AttrDict(default_constants)
+        cp_v = constants.cp_v
+        cp_d = constants.cp_d
+        R_v = constants.R_v
+        R_d = constants.R_d
+        g = scipy.constants.g
+
+        layers = []
+
+        qv_sat_0 = self.qv_sat(z=0.)
+        q_v = RH0*qv_sat_0
+        q_d = 1. - q_v
+
+        self.q_v0 = q_v
+
+        cp = q_v*cp_v + q_d*cp_d
+        R = q_v*R_v + q_d*R_d
+
+        rho0 = p0/(R*T0)
+
+        self.dTdz_BL = -g/cp
+        self.dTdz_2 = dTdz_mid  # K/m
+
+        self.dRHdz_1 = dRHdz_1
+
+        # TODO: would be nice to abstract this away to have a better storage
+        # for gas-mixture properties
+        gas_properties = AttrDict(M=scipy.constants.R*1000./R)
+
+        self.BL_profile = HydrostaticallyBalancedAtmosphere(
+            rho0=rho0, p0=p0, dTdz=self.dTdz_BL, gas_properties=gas_properties)
+
+        p_BL_top = self.BL_profile.p(z_BL)
+        T_BL_top = self.BL_profile.temp(z_BL)
+
+        rho_BL_top = p_BL_top/(R*T_BL_top)
+
+        self.MIDDLE_profile = HydrostaticallyBalancedAtmosphere(
+            rho0=rho_BL_top,
+            p0=p_BL_top,
+            dTdz=self.dTdz_2,
+            gas_properties=gas_properties,
+        )
+
+        rho_top = self.rho(self.z_top)
+        p_top = self.p(self.z_top)
+
+        self.dRHdz_2 = -0.4e-3
+        self.TOP_profile = HydrostaticallyBalancedAtmosphere(
+            rho0=rho_top,
+            p0=p_top,
+            dTdz=0.0,
+            gas_properties=gas_properties,
+        )
+
+    def qv_sat(self, z):
+        from pyclouds import parameterisations
+        T = self.temp(z)
+        p = self.p(z)
+        return parameterisations.pv_sat.qv_sat(T=T, p=p)
+
+    def temp(self, z):
+        @np.vectorize
+        def f(z):
+            if z == 0.:
+                return self.T0
+            elif z <= self.z_BL:
+                return self.BL_profile.temp(z)
+            elif z <= self.z_top:
+                return self.MIDDLE_profile.temp(z - self.z_BL)
+            else:
+                return self.TOP_profile.temp(z - self.z_top)
+        return f(z)
+
+    def p(self, z):
+        @np.vectorize
+        def f(z):
+            if z == 0.:
+                return self.p0
+            elif z <= self.z_BL:
+                return self.BL_profile.p(z)
+            elif z <= self.z_top:
+                return self.MIDDLE_profile.p(z - self.z_BL)
+            else:
+                return self.TOP_profile.p(z - self.z_top)
+        return f(z)
+
+    def rel_humidity(self, z):
+        @np.vectorize
+        def f(z):
+            if z <= self.z_BL:
+                qv_sat = self.qv_sat(z)
+
+                return self.q_v0/qv_sat
+            elif z <= self.z_top:
+                RH_BL_top = self.rel_humidity(self.z_BL)
+
+                return RH_BL_top + (z - self.z_BL)*self.dRHdz_1
+            else:
+                RH_top = self.rel_humidity(self.z_top)
+
+                return RH_top + (z - self.z_top)*self.dRHdz_2
+
+        return f(z)
+
+    def q_v(self, z):
+        return self.rel_humidity(z)*self.qv_sat(z)
+
+
+    def rho(self, z):
+        @np.vectorize
+        def f(z):
+            if z == 0.:
+                return self.p0
+            elif z < self.z_BL:
+                return self.BL_profile.rho(z)
+            else:
+                return self.MIDDLE_profile.rho(z - self.z_BL)
+        return f(z)
+
+
+
 if __name__ == "__main__":
     from matplotlib import pyplot as plot
 
-    atmosphere = Soong1973()
-    atmosphere = Soong1973()
+    profile = Soong1973()
 
     plot.ion()
     z = np.linspace(0.0, 20000.0, 100)
-    temp = atmosphere.temp([z])
+    temp = profile.temp([z])
 
     plot.subplot(131)
-    plot.plot(atmosphere.temp([z]), z)
-    #plot.plot(atmosphere.dew_point([z]), z)
+    plot.plot(profile.temp([z]), z)
+    #plot.plot(profile.dew_point([z]), z)
     plot.xlabel("Temperature [K]")
     plot.ylabel("Height [m]")
     plot.grid(True)
 
     plot.subplot(132)
-    plot.plot(atmosphere.rel_humidity([z]), z)
+    plot.plot(profile.rel_humidity([z]), z)
     plot.xlabel("Relative humidity [%]")
     plot.ylabel("Height [m]")
     plot.xlim(0.0, 1.0)
     plot.grid(True)
 
     plot.subplot(133)
-    plot.plot(atmosphere.p([z]), z)
+    plot.plot(profile.p([z]), z)
     plot.xlabel("Pressure [Pa]")
     plot.ylabel("Height [m]")
     plot.xlim(0.0, None)
@@ -448,3 +923,15 @@ if __name__ == "__main__":
 
     plot.draw()
     raw_input()
+
+
+    r = RICO()
+
+    z = np.linspace(0., 4e3, 100)
+
+    print r.p(z)
+
+    import matplotlib.pyplot as plot
+    plot.plot(r.p(z), z)
+    plot.draw()
+    plot.show()
