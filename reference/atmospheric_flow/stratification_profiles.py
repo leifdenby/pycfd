@@ -762,7 +762,7 @@ class DiscreteProfile():
             return scipy.interpolate.interp1d(x=self.z, y=y_discrete)
 
         else:
-            raise AttributeError
+            raise AttributeError("Can't find variable `{}`".format(name))
 
 class TwoLayerMoistIsentropicPBL():
     """
