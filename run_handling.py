@@ -129,6 +129,11 @@ class TaskRun(object):
 
         self._setupLogfile()
 
+        # setup lockfile
+        with open(os.path.join(self.output_directory, 'is_running.lock'), 'w') as fh:
+            import datetime
+            fh.write(str(datetime.datetime.now()))
+
         if not self.fork_process or child_pid is not None:
             self.task_process = self.spawnProcess(logging_target=self.logging_target)
 
@@ -148,6 +153,11 @@ class TaskRun(object):
                 self.task_process = FakeProcess()
 
         return self
+
+    def __del__(self):
+        # delete the lockfile
+        if os.path.exists(os.path.join(self.output_directory, 'is_running.lock')):
+            os.remove(os.path.join(self.output_directory, 'is_running.lock'))
 
     def spawnProcess(self, logging_target):
         self.current_run += 1
@@ -198,12 +208,11 @@ class TaskRun(object):
             except ImportError:
                 pass
 
-
     def _setupLogfile(self):
         # setup task logfile
         log_filename = os.path.join(self.output_directory, "run.log")
         self.log_filename = log_filename
-        self.logfile = open(log_filename, "w")
+        self.logfile = open(log_filename, "a")
         self.logging_target = LogEmitter(self.logfile)
 
     def communicate(self):
