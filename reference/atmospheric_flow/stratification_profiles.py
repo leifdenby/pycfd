@@ -1,3 +1,4 @@
+import warnings
 import numpy as np
 import scipy.constants
 import scipy.optimize
@@ -654,7 +655,7 @@ class RICO:
             return 0.0
 
     @np.vectorize
-    def ddt_T_ls(z):
+    def ddt_theta_ls(z):
         """
         Large Scale Horizontal Liq. Water Pot. Temperature Advection combined
         with Radiative Cooling [K/s] 
@@ -675,11 +676,21 @@ class RICO:
         in kg/kg/s, not g/kg/s
         """
         if 0 < z <= 2980:
-            return -1.0 / 86400 + (1.3456/ 86400) * z / 2980 * 1.0e-3
+            return (-1.0 / 86400 + (1.3456/ 86400) * z / 2980) * 1.0e-3
         elif z > 2980:
-            return 4. *10-6  * 1.0e-3
+            return 4.*1.0e-6  * 1.0e-3
         else:
             return 0.0
+
+    @np.vectorize
+    def w_subsidence(z):
+        """
+        Large Scale Subsidence w [m/s] Apply the subsidence on the prognostic fields of q_t, theta_l.
+        """
+        if 0 < z < 2260:
+            return - (0.005/2260) * z
+        else:
+            return - 0.005
 
     @np.vectorize
     def tke(z):
@@ -751,13 +762,13 @@ class DiscreteProfile():
             return scipy.interpolate.interp1d(x=self.z, y=y_discrete)
 
         else:
-            raise AttributeError
+            raise AttributeError("Can't find variable `{}`".format(name))
 
 class TwoLayerMoistIsentropicPBL():
     """
     Moist sub-saturated well-mixed (isentropic and constant water vapour
     concentration) boundary layer with a layer above with higher lapse-rate"""
-    def __init__(self, z_BL, RH0, T0, z_INV, dRHdz_1=-0.1e-3, p0=101325., dTdz_mid=-6.0e-3):
+    def __init__(self, z_BL, RH0, T0, z_INV, dRHdz_1=-0.1e-3, p0=101325., dTdz_mid=-6.0e-3, constants=None):
         self.z_BL = z_BL
         self.T0 = T0
         self.p0 = p0
@@ -765,14 +776,20 @@ class TwoLayerMoistIsentropicPBL():
 
         self.z_INV = z_INV
 
-        from pyclouds.common import default_constants, AttrDict
+        if constants is None:
+            from pyclouds.common import default_constants
+            constants = default_constants
+            warnings.warn("Using default constants from pyclouds")
 
-        constants = AttrDict(default_constants)
+        from attrdict import AttrDict
+        constants = AttrDict(constants)
         cp_v = constants.cp_v
         cp_d = constants.cp_d
         R_v = constants.R_v
         R_d = constants.R_d
-        g = scipy.constants.g
+        g = constants.g
+
+        self.constants = constants
 
         layers = []
 
@@ -786,6 +803,7 @@ class TwoLayerMoistIsentropicPBL():
         R = q_v*R_v + q_d*R_d
 
         rho0 = p0/(R*T0)
+        self.rho0 = rho0
 
         self.dTdz_BL = -g/cp
         self.dTdz_2 = dTdz_mid  # K/m
@@ -804,55 +822,109 @@ class TwoLayerMoistIsentropicPBL():
 
         rho_BL_top = p_BL_top/(R*T_BL_top)
 
-        self.MIDDLE_profile = HydrostaticallyBalancedAtmosphere(
-            rho0=rho_BL_top,
-            p0=p_BL_top,
-            dTdz=self.dTdz_2,
-            gas_properties=gas_properties,
-        )
+        # self.MIDDLE_profile = HydrostaticallyBalancedAtmosphere(
+            # rho0=rho_BL_top,
+            # p0=p_BL_top,
+            # dTdz=self.dTdz_2,
+            # gas_properties=gas_properties,
+        # )
+
+        self.dRHdz_2 = -0.4e-3
+        self.__init_profile(p_min=500e2)
 
         rho_top = self.rho(self.z_INV)
         p_top = self.p(self.z_INV)
 
-        self.dRHdz_2 = -0.4e-3
-        self.TOP_profile = HydrostaticallyBalancedAtmosphere(
-            rho0=rho_top,
-            p0=p_top,
-            dTdz=0.0,
-            gas_properties=gas_properties,
-        )
+        # self.TOP_profile = HydrostaticallyBalancedAtmosphere(
+            # rho0=rho_top,
+            # p0=p_top,
+            # dTdz=0.0,
+            # gas_properties=gas_properties,
+        # )
+
+    def __init_profile(self, p_min):
+        from pyclouds import parameterisations
+        qv_sat__f = parameterisations.ParametersationsWithSpecificConstants(self.constants).pv_sat.qv_sat
+        R_v = self.constants.get('R_v')
+        R_d = self.constants.get('R_d')
+        g = self.constants.get('g')
+
+        def rho_f(T, p, qv):
+            qd = 1.0 - qv
+            rho_inv = (qd*R_d + qv*R_v)*T/p
+            return 1.0/rho_inv
+
+        # do numerical integration to take into account that heat capacity changes
+        dp = -100. # [Pa]
+
+        p = [self.p0,]
+        rho = [self.rho0,]
+        z = [0.0, ]
+
+        while p[-1] > p_min:
+            p.append(p[-1] + dp)
+
+            # dp/dz = - rho * g
+            dz = - dp/(rho[-1]*g)
+
+            z.append(z[-1] + dz)
+
+            T = self.temp(z[-1])
+            if z[-1] <= self.z_BL:
+                qv = self.q_v0
+            else:
+                qv = self.rel_humidity(z[-1])*qv_sat__f(T=T, p=p[-1])
+            rho.append(rho_f(T=T, p=p[-1], qv=qv))
+
+            self._p = np.array(p)
+            self._rho = np.array(rho)
+            self._z = np.array(z)
+
 
     def qv_sat(self, z):
         from pyclouds import parameterisations
         T = self.temp(z)
         p = self.p(z)
-        return parameterisations.pv_sat.qv_sat(T=T, p=p)
+        return parameterisations.ParametersationsWithSpecificConstants(self.constants).pv_sat.qv_sat(T=T, p=p)
 
     def temp(self, z):
         @np.vectorize
         def f(z):
-            if z == 0.:
+            if z == 0.0:
                 return self.T0
             elif z <= self.z_BL:
-                return self.BL_profile.temp(z)
+                return self.T0 + z*self.dTdz_BL
             elif z <= self.z_INV:
-                return self.MIDDLE_profile.temp(z - self.z_BL)
+                T_BL_top = self.temp(self.z_BL)
+
+                return T_BL_top + (z - self.z_BL)*self.dTdz_2
             else:
-                return self.TOP_profile.temp(z - self.z_INV)
+                T_top = self.temp(self.z_INV)
+                return T_top
+
         return f(z)
 
     def p(self, z):
         @np.vectorize
         def f(z):
-            if z == 0.:
+            if z == 0.0:
                 return self.p0
-            elif z <= self.z_BL:
-                return self.BL_profile.p(z)
-            elif z <= self.z_INV:
-                return self.MIDDLE_profile.p(z - self.z_BL)
             else:
-                return self.TOP_profile.p(z - self.z_INV)
+                return scipy.interp(z, self._z, self._p)
         return f(z)
+
+
+        # @np.vectorize
+        # def f(z):
+            # if z == 0.:
+                # return self.p0
+            # elif z <= self.z_BL:
+                # return self.BL_profile.p(z)
+            # elif z <= self.z_INV:
+                # return self.MIDDLE_profile.p(z - self.z_BL)
+            # else:
+                # return self.TOP_profile.p(z - self.z_INV)
+        # return f(z)
 
     def rel_humidity(self, z):
         @np.vectorize
@@ -879,13 +951,33 @@ class TwoLayerMoistIsentropicPBL():
     def rho(self, z):
         @np.vectorize
         def f(z):
-            if z == 0.:
-                return self.p0
-            elif z < self.z_BL:
-                return self.BL_profile.rho(z)
+            if z == 0.0:
+                return self.rho0
             else:
-                return self.MIDDLE_profile.rho(z - self.z_BL)
+                return scipy.interp(z, self._z, self._rho)
         return f(z)
+
+        # from pyclouds import parameterisations
+        # T = self.temp(z)
+        # p = self.p(z)
+        # qv_sat__f = parameterisations.ParametersationsWithSpecificConstants(self.constants).pv_sat.qv_sat
+        # qv = self.rel_humidity(z)*qv_sat__f(T=T, p=p)
+
+        # R_v = self.constants.get('R_v')
+        # R_d = self.constants.get('R_d')
+
+        # qd = 1.0 - qv
+
+        # rho_inv = (qd*R_d + qv*R_v)*T/p
+        # return 1.0/rho_inv
+
+        # @np.vectorize
+        # def f(z):
+            # if z < self.z_BL:
+                # return self.BL_profile.rho(z)
+            # else:
+                # return self.MIDDLE_profile.rho(z - self.z_BL)
+        # return f(z)
 
     def __str__(self):
         return "Idealised Two-layer atmosphere ($RH_0={RH0:.0f}\%$, "\
