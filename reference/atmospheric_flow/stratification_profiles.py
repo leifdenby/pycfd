@@ -668,7 +668,7 @@ class RICO:
             return 0.0
 
     @np.vectorize
-    def ddt_qv_ls(z):
+    def ddt_qt_ls(z):
         """
         Large Scale Horizontal Moisture Advection [(kg/kg)/s]
 
