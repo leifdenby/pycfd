@@ -655,7 +655,7 @@ class RICO:
             return 0.0
 
     @np.vectorize
-    def ddt_theta_ls(z):
+    def ddt_theta_l__ls(z):
         """
         Large Scale Horizontal Liq. Water Pot. Temperature Advection combined
         with Radiative Cooling [K/s] 
