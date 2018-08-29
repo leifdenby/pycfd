@@ -461,7 +461,7 @@ class SimpleMoistStable(LayeredMoistAtmosphere):
         return "Simple stable moist atmosphere based on Soong1973 (dRHdz=%g%%/km)" % (self.dRHdz*1.e3)
 
 
-class RICO:
+class RICO(object):
     """
     Based on KNMI's synthesis of the RICO field compaign for a LES intercomparison study
 
@@ -470,6 +470,8 @@ class RICO:
     OBS: The sea surface temperature is different from the temperature at z=0m,
     which is necessary to have surface fluxes.
     """
+    z_max = 4e3
+
     def __init__(self, include_wind=False):
         from pyclouds import parameterisations
 
@@ -496,8 +498,6 @@ class RICO:
         # the KNMI site I will use what I believe are standard values here
         self.R_v = parameterisations.common.default_constants.get('R_v')
         self.cp_v = parameterisations.common.default_constants.get('cp_v')
-
-        self.z_max = 4e3
 
         self._create_profile()
 
@@ -668,7 +668,7 @@ class RICO:
             return 0.0
 
     @np.vectorize
-    def ddt_qt_ls(z):
+    def ddt_qv_ls(z):
         """
         Large Scale Horizontal Moisture Advection [(kg/kg)/s]
 
@@ -739,6 +739,68 @@ class RICO_SCM:
     def _create_profile():
         pass
 
+class RICO_deep(RICO):
+    """
+    RICO-like setup, but with deeper inversion height, with the intention to
+    lead to deep convection
+    """
+    z_max = 10.0e3
+
+    def __init__(self, z_sub=2260., z_adv=2980., z_rh=3260., qv_lim=1.8,
+                 qv_cld=2.4):
+        self.z_sub = z_sub
+        self.z_adv = z_adv
+        self.z_rh = z_rh
+        self.qv_lim = qv_lim
+        self.qv_cld = qv_cld
+
+        super(RICO_deep, self).__init__(include_wind=True)
+
+
+    def w_subsidence(self, z):
+        """
+        Large Scale Subsidence w [m/s] Apply the subsidence on the prognostic fields of q_t, theta_l.
+        """
+        @np.vectorize
+        def fn(z):
+            if 0 < z < self.z_sub:
+                return - (0.005/self.z_sub) * z
+            else:
+                return - 0.005
+
+        return fn(z)
+
+
+    def q_t(self, z):
+        """ Total water specific concentration [kg/kg]"""
+
+        @np.vectorize
+        def fn(z):
+            if 0 <= z < 740:
+                return 16.0 + (13.8 - 16.0) / (740) * z
+            if 740 < z < self.z_rh:
+                return 13.8 + (self.qv_cld - 13.8) / (self.z_rh - 740)*(z - 740)
+            else:
+                return self.qv_cld + (self.qv_lim - self.qv_cld)/(self.z_max - self.z_rh)*(z - self.z_rh) 
+
+        return fn(z)/1000.
+
+
+    def ddt_qv_ls(self, z):
+        """
+        Large Scale Horizontal Moisture Advection [(kg/kg)/s]
+
+        NB: not exactly as the KNMI website because we want to return tendencies
+        in kg/kg/s, not g/kg/s
+        """
+        @np.vectorize
+        def fn(z):
+            if 0 < z <= self.z_adv:
+                return (-1.0 / 86400 + (1.3456/ 86400) * z / self.z_adv) * 1.0e-3
+            else:
+                return 4.*1.0e-6  * 1.0e-3
+
+        return fn(z)
 
 class DiscreteProfile():
     """
