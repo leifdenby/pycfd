@@ -808,12 +808,16 @@ class DiscreteProfile():
     interface as the general profiles but uses interpolation internally
     """
 
-    def __init__(self, z, **kwargs):
+    def __init__(self, z, description, **kwargs):
         self.vars = kwargs
         self.z = z
+        self.description = description
 
         if 'T' in kwargs and not 'temp' in kwargs:
             self.vars['temp'] = kwargs['T']
+
+        if 'temperature' in kwargs and not 'temp' in kwargs:
+            self.vars['temp'] = kwargs['temperature']
 
     def __getattr__(self, name):
         if name in self.__dict__:
@@ -825,6 +829,10 @@ class DiscreteProfile():
 
         else:
             raise AttributeError("Can't find variable `{}`".format(name))
+
+    def __str__(self):
+        return self.description
+
 
 class TwoLayerMoistIsentropicPBL():
     """
